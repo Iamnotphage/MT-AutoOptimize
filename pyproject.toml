@@ -1,0 +1,8 @@
+[project]
+name = "mt-autooptimize"
+version = "0.1.0"
+description = "MT-3000 coding agent"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=1.2.13",
+]

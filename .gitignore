@@ -3,6 +3,7 @@ __pycache__
 output/code/kernel_generated.h
 output/reports/*
 .devkit
+.venv/
 
 # 配置文件
 config.json
