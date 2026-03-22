@@ -4,6 +4,7 @@ output/code/kernel_generated.h
 output/reports/*
 .devkit
 .venv/
+.pytest_cache/
 
 # 配置文件
 config.json

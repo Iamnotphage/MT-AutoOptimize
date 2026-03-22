@@ -24,23 +24,23 @@ class AgentState(TypedDict):
     message: Annotated[list[BaseMessage], add_messages]
 
     # 当轮工具调用情况
-    pending_tool_calls: list[ToolCallInfo]
-    completed_tool_calls: list[ToolCallInfo]
+    pending_tool_calls: list[ToolCallInfo]      # 当前轮待执行的工具调用
+    completed_tool_calls: list[ToolCallInfo]    # 当前轮已完成的工具调用
 
     # 控制流
-    turn_count: int
-    max_turns: int
-    should_continue: bool
-    needs_human_approval: bool
-    approval_requests: list[dict]
+    turn_count: int                             # 当前轮次
+    max_turns: int                              # 最大轮次
+    should_continue: bool                       # 是否继续循环
+    needs_human_approval: bool                  # 是否需要人工审批
+    approval_requests: list[dict]               # 待审批项
 
     # MT-3000相关
-    optimization_mode: str | None
-    source_file: str | None
-    compile_results: list[dict]
-    benchmark_results: list[dict]
-    current_candidates: dict | None
+    optimization_mode: str | None               # 优化模式
+    source_file: str | None                     # 源文件路径
+    compile_results: list[dict]                 # 编译结果历史
+    benchmark_results: list[dict]               # 基准测试结果历史
+    current_candidates: dict | None             # 当前候选方案
 
     # Meta information
-    working_directory: str
-    session_id: str
+    working_directory: str                      # 工作目录
+    session_id: str                             # 会话ID
