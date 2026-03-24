@@ -21,6 +21,20 @@ uv sync
 uv run python -m cli.app
 ```
 
+## 调试方法
+
+用`LangSmith`检查结点运行状态
+
+```bash
+uv add --dev langsmith
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY="ls-your-api-key"
+export LANGSMITH_PROJECT="mt-autooptimize"
+```
+
+启动项目，运行一次，登陆`LangSmith`的[网站](https://smith.langchain.com)，检查项目运行情况。
+
+
 ---
 
 ## 项目介绍(deprecated)

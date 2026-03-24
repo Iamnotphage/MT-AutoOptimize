@@ -5,15 +5,15 @@
 
 from __future__ import annotations
 
-import json
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 
-from core.event_bus import AgentEvent, EventBus, EventType
+from core.event_bus import AgentEvent, EventType
+
+if TYPE_CHECKING:
+    from core.agent import AgentRuntime
 
 PROMPT_STYLE = "#847ACE"
 PROMPT_SYMBOL = "❯"
@@ -22,16 +22,9 @@ PROMPT_SYMBOL = "❯"
 class Repl:
     """交互式 读取-执行-打印 循环"""
 
-    def __init__(
-        self,
-        console: Console,
-        *,
-        graph: Any,
-        event_bus: EventBus,
-    ) -> None:
+    def __init__(self, console: Console, runtime: AgentRuntime) -> None:
         self.console = console
-        self.graph = graph
-        self.event_bus = event_bus
+        self.runtime = runtime
         self.running = True
         self.thread_id = uuid.uuid4().hex
 
@@ -42,11 +35,12 @@ class Repl:
     # ── EventBus 订阅 ───────────────────────────────────────────
 
     def _bind_events(self) -> None:
-        self.event_bus.subscribe(EventType.CONTENT, self._on_content)
-        self.event_bus.subscribe(EventType.THOUGHT, self._on_thought)
-        self.event_bus.subscribe(EventType.TOOL_CALL_REQUEST, self._on_tool_request)
-        self.event_bus.subscribe(EventType.TOOL_CALL_COMPLETE, self._on_tool_complete)
-        self.event_bus.subscribe(EventType.ERROR, self._on_error)
+        bus = self.runtime.event_bus
+        bus.subscribe(EventType.CONTENT, self._on_content)
+        bus.subscribe(EventType.THOUGHT, self._on_thought)
+        bus.subscribe(EventType.TOOL_CALL_REQUEST, self._on_tool_request)
+        bus.subscribe(EventType.TOOL_CALL_COMPLETE, self._on_tool_complete)
+        bus.subscribe(EventType.ERROR, self._on_error)
 
     def _end_stream(self) -> None:
         if self._streaming:
@@ -107,7 +101,7 @@ class Repl:
         }
 
         try:
-            self.graph.invoke(state_input, config)
+            self.runtime.graph.invoke(state_input, config)
         except Exception as e:
             self._end_stream()
             self.console.print(f"\n  [red bold]Agent 执行出错:[/red bold] {e}")
