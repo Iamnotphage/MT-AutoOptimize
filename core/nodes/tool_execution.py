@@ -1,7 +1,7 @@
 """
 工具执行节点 — 执行已批准的工具调用
 
-对应 gemini-cli Scheduler + ToolExecutor:
+对应 gemini-cli Scheduler:
   1. 筛选 pending_tool_calls 中 status=="pending" 的调用 (跳过 cancelled)
   2. 逐个执行, 通过 EventBus 发送状态变更事件
   3. 捕获结果或异常, 写入 completed_tool_calls
@@ -19,24 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────
-# 工具执行器协议 (供 P1+ ToolRegistry 实现)
-# ──────────────────────────────────────────────────────────────────
-
-
-class ToolExecutor(Protocol):
-    """工具执行器接口, tool_registry 实现此协议即可"""
-    # TODO: 实现工具执行器接口
-    def execute(self, tool_name: str, arguments: dict) -> str: ...
-
-
-# ──────────────────────────────────────────────────────────────────
 # 工厂: 创建 tool_execution 节点
 # ──────────────────────────────────────────────────────────────────
 
 
 def create_tool_execution_node(
     event_bus: EventBus,
-    executor: ToolExecutor | Callable[[str, dict], str],
+    executor: Callable[[str, dict], str],
 ) -> Callable[[AgentState], dict]:
     """
     创建 tool_execution 节点函数
@@ -50,14 +39,6 @@ def create_tool_execution_node(
     Returns:
         LangGraph 节点函数 ``(AgentState) -> dict``
     """
-    # 统一为 callable:
-    #   - 实现了 ToolExecutor 协议 → 取 .execute 方法
-    #   - 否则视为可直接调用的函数
-    execute_fn: Callable[[str, dict], str]
-    if "execute" in dir(type(executor)):
-        execute_fn = executor.execute
-    else:
-        execute_fn = executor
 
     def tool_execution_node(state: AgentState) -> dict:
         pending = state.get("pending_tool_calls", [])
@@ -88,7 +69,7 @@ def create_tool_execution_node(
 
             # ── 执行 ──
             try:
-                result = execute_fn(tc["tool_name"], tc["arguments"])
+                result = executor(tc["tool_name"], tc["arguments"])
                 executing_tc = {
                     **executing_tc,
                     "status": "success",

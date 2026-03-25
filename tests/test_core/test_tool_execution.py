@@ -173,19 +173,3 @@ class TestToolExecutionNode:
         idx_all = types.index(EventType.ALL_TOOLS_COMPLETE)
         assert idx_update < idx_complete < idx_all
 
-    def test_executor_protocol(self, event_bus):
-        """支持带 .execute 方法的对象 (ToolExecutor 协议)"""
-
-        class MyRegistry:
-            def execute(self, tool_name: str, arguments: dict) -> str:
-                return f"executed {tool_name}"
-
-        node = create_tool_execution_node(event_bus, MyRegistry())
-        state = {
-            "pending_tool_calls": [_make_tc("read_file")],
-            "turn_count": 0,
-        }
-
-        result = node(state)
-
-        assert result["completed_tool_calls"][0]["result"] == "executed read_file"
