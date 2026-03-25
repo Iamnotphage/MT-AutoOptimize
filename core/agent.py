@@ -15,7 +15,7 @@ from core.config import load_app_config
 from core.event_bus import EventBus
 from core.graph import build_agent_graph
 from core.llm import create_chat_model
-from tools import ReadFileTool, ToolRegistry
+from tools import ToolRegistry, create_default_tools
 
 
 @dataclass
@@ -28,12 +28,26 @@ class AgentRuntime:
     workspace: str
 
 
-def _make_sync_executor(registry: ToolRegistry):
-    """将 async ToolRegistry.execute 桥接为 sync (tool_name, args) -> str"""
+def _make_sync_executor(registry: ToolRegistry, event_bus: EventBus):
+    """将 async ToolRegistry.execute 桥接为 sync (tool_name, args) -> str
+
+    当工具返回的 metadata 中包含 diff 等富数据时，
+    通过 EventBus TOOL_LIVE_OUTPUT 推送给 CLI 层渲染。
+    """
+    from core.event_bus import AgentEvent, EventType
+
     def executor(tool_name: str, arguments: dict) -> str:
         result = asyncio.run(registry.execute(tool_name, arguments))
         if result.error:
             raise RuntimeError(result.error)
+
+        diff = result.metadata.get("diff")
+        if diff is not None:
+            event_bus.emit(AgentEvent(
+                type=EventType.TOOL_LIVE_OUTPUT,
+                data={"tool_name": tool_name, "kind": "diff", "diff": diff},
+            ))
+
         return result.output
     return executor
 
@@ -60,13 +74,13 @@ def create_agent_runtime(
 
     registry = ToolRegistry()
     ws = workspace or os.getcwd()
-    registry.register(ReadFileTool(workspace=ws))
+    registry.register(*create_default_tools(workspace=ws))
 
     graph = build_agent_graph(
         llm=llm,
         event_bus=event_bus,
         tool_schemas=registry.schemas,
-        executor=_make_sync_executor(registry),
+        executor=_make_sync_executor(registry, event_bus),
         checkpointer=MemorySaver(),
     )
 

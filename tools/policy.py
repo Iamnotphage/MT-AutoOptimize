@@ -3,6 +3,7 @@
 DEFAULT_TOOL_RISK: dict[str, str] = {
     # 文件操作
     "read_file":           "low",
+    "ls":                  "low",
     "glob_search":         "low",
     "grep_search":         "low",
     "write_file":          "medium",
