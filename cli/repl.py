@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 PROMPT_STYLE = "#847ACE"
 PROMPT_SYMBOL = "❯"
 _RISK_STYLE = {"low": "green", "medium": "yellow", "high": "red bold"}
-_TOOL_DISPLAY = {"write_file": "Write", "read_file": "Read"}
+_TOOL_DISPLAY = {"write_file": "Write", "read_file": "Read", "ls": "Ls"}
 _BG_USER = "on #252530"
 
 

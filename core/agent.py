@@ -15,7 +15,7 @@ from core.config import load_app_config
 from core.event_bus import EventBus
 from core.graph import build_agent_graph
 from core.llm import create_chat_model
-from tools import ReadFileTool, ToolRegistry, WriteFileTool
+from tools import ToolRegistry, create_default_tools
 
 
 @dataclass
@@ -74,10 +74,7 @@ def create_agent_runtime(
 
     registry = ToolRegistry()
     ws = workspace or os.getcwd()
-    registry.register(
-        ReadFileTool(workspace=ws),
-        WriteFileTool(workspace=ws),
-    )
+    registry.register(*create_default_tools(workspace=ws))
 
     graph = build_agent_graph(
         llm=llm,
