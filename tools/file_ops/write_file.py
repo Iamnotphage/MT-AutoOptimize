@@ -16,16 +16,16 @@ from tools.base import BaseTool, ToolResult, ToolRiskLevel
 
 
 class WriteFileArgs(BaseModel):
-    file_path: str = Field(description="要写入的文件路径（相对于工作区）")
-    content: str = Field(description="要写入的完整文件内容")
+    file_path: str = Field(description="Path to the file to write (relative to workspace)")
+    content: str = Field(description="Complete file content to write")
 
 
 class WriteFileTool(BaseTool):
     name = "write_file"
     description = (
-        "写入内容到指定文件。文件不存在时自动创建（含父目录）。"
-        "文件已存在时覆盖，并返回变更 diff 供确认。"
-        "必须提供完整文件内容，不要省略任何部分。"
+        "Write content to a file. Creates the file and parent directories if they don't exist. "
+        "If the file exists, it will be overwritten and a diff is returned for review. "
+        "Must provide complete file content."
     )
     risk_level = ToolRiskLevel.MEDIUM
     args_schema = WriteFileArgs
@@ -37,10 +37,10 @@ class WriteFileTool(BaseTool):
         resolved = (self.workspace / file_path).resolve()
 
         if not str(resolved).startswith(str(self.workspace)):
-            return ToolResult(output="", error=f"路径越界: {file_path} 不在工作区内")
+            return ToolResult(output="", error=f"Path out of bounds: {file_path} is not within workspace")
 
         if resolved.exists() and resolved.is_dir():
-            return ToolResult(output="", error=f"目标是目录而非文件: {file_path}")
+            return ToolResult(output="", error=f"Target is a directory, not a file: {file_path}")
 
         is_new = not resolved.exists()
 
@@ -49,15 +49,15 @@ class WriteFileTool(BaseTool):
             try:
                 original = resolved.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
-                return ToolResult(output="", error=f"读取原文件失败: {e}")
+                return ToolResult(output="", error=f"Failed to read original file: {e}")
 
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
         except PermissionError:
-            return ToolResult(output="", error=f"权限不足: {file_path}")
+            return ToolResult(output="", error=f"Permission denied: {file_path}")
         except OSError as e:
-            return ToolResult(output="", error=f"写入失败: {e}")
+            return ToolResult(output="", error=f"Write failed: {e}")
 
         diff = generate_diff(file_path, original, content, is_new=is_new)
 

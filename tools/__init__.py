@@ -3,10 +3,11 @@ from tools.registry import ToolRegistry
 from tools.file_ops.read_file import ReadFileTool
 from tools.file_ops.write_file import WriteFileTool
 from tools.file_ops.ls import LsTool
+from tools.file_ops.glob import GlobTool
 
 __all__ = [
     "BaseTool", "ToolResult", "ToolRiskLevel", "ToolRegistry",
-    "ReadFileTool", "WriteFileTool", "LsTool",
+    "ReadFileTool", "WriteFileTool", "LsTool", "GlobTool",
     "create_default_tools",
 ]
 
@@ -17,4 +18,5 @@ def create_default_tools(*, workspace: str) -> list[BaseTool]:
         ReadFileTool(workspace=workspace),
         WriteFileTool(workspace=workspace),
         LsTool(workspace=workspace),
+        GlobTool(workspace=workspace),
     ]

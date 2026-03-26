@@ -24,21 +24,21 @@ _ALWAYS_IGNORE = {
 class LsArgs(BaseModel):
     dir_path: str = Field(
         default=".",
-        description="要列出的目录路径（相对于工作区，默认为工作区根目录）",
+        description="Directory path to list (relative to workspace, defaults to workspace root)",
     )
     ignore: Optional[list[str]] = Field(
         default=None,
-        description="额外的 glob 忽略模式列表，如 ['*.pyc', 'dist']",
+        description="Additional glob patterns to ignore (e.g., ['*.pyc', 'dist'])",
     )
 
 
 class LsTool(BaseTool):
     name = "ls"
     description = (
-        "列出目录中的文件和子目录。"
-        "默认列出工作区根目录，返回条目名称、类型和大小。"
-        "自动跳过 .git / __pycache__ / node_modules 等常见无关目录。"
-        "可通过 ignore 参数传入额外的 glob 忽略模式。"
+        "List files and directories in a directory. "
+        "Returns entry names, types, and sizes. "
+        "Automatically skips common nuisance directories like .git, node_modules, __pycache__. "
+        "Supports additional ignore patterns via the ignore parameter."
     )
     risk_level = ToolRiskLevel.LOW
     args_schema = LsArgs
@@ -55,20 +55,20 @@ class LsTool(BaseTool):
         resolved = (self.workspace / dir_path).resolve()
 
         if not str(resolved).startswith(str(self.workspace)):
-            return ToolResult(output="", error=f"路径越界: {dir_path} 不在工作区内")
+            return ToolResult(output="", error=f"Path out of bounds: {dir_path} is not within workspace")
 
         if not resolved.exists():
-            return ToolResult(output="", error=f"目录不存在: {dir_path}")
+            return ToolResult(output="", error=f"Directory does not exist: {dir_path}")
 
         if not resolved.is_dir():
-            return ToolResult(output="", error=f"路径不是目录: {dir_path}")
+            return ToolResult(output="", error=f"Path is not a directory: {dir_path}")
 
         try:
             raw_entries = list(resolved.iterdir())
         except PermissionError:
-            return ToolResult(output="", error=f"权限不足: {dir_path}")
+            return ToolResult(output="", error=f"Permission denied: {dir_path}")
         except OSError as e:
-            return ToolResult(output="", error=f"读取目录失败: {e}")
+            return ToolResult(output="", error=f"Failed to read directory: {e}")
 
         ignore_patterns = list(ignore or [])
 

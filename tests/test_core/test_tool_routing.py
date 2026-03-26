@@ -89,7 +89,7 @@ class TestToolRoutingNode:
         state = {
             "pending_tool_calls": [
                 _make_tc("read_file", "call_1"),
-                _make_tc("glob_search", "call_2"),
+                _make_tc("glob", "call_2"),
             ],
             "turn_count": 0,
         }
