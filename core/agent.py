@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from core.config import load_app_config
+from config import load_llm_config
 from core.event_bus import EventBus
 from core.graph import build_agent_graph
 from core.llm import create_chat_model
@@ -55,7 +55,6 @@ def _make_sync_executor(registry: ToolRegistry, event_bus: EventBus):
 def create_agent_runtime(
     *,
     workspace: str | None = None,
-    config_path: str = "config.json",
 ) -> AgentRuntime:
     """一行组装完整 Agent
 
@@ -66,9 +65,9 @@ def create_agent_runtime(
     """
     from langgraph.checkpoint.memory import MemorySaver
 
-    cfg = load_app_config(config_path)
+    llm_cfg = load_llm_config()
 
-    llm = create_chat_model(cfg["code_llm"], env_prefix="CODE_LLM")
+    llm = create_chat_model(llm_cfg)
 
     event_bus = EventBus()
 

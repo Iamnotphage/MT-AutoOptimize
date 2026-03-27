@@ -5,11 +5,14 @@ channels:
 dependencies:
   - python=3.10
   - pip
-  - pyyaml
-  - requests
   - pip:
-      - openai
-      - langchain
-      - langchain-openai
-      - tenacity
-      - rich
+      - python-dotenv>=0.9.9
+      - langchain>=1.2.13
+      - langchain-openai>=0.3.0
+      - langgraph>=1.1.3
+      - openai>=2.29.0
+      - rich>=14.3.3
+      - pytest>=9.0.2
+      - pytest-mock>=3.15.1
+      - ipython>=8.38.0
+      - langsmith>=0.7.22

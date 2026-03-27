@@ -10,9 +10,8 @@ MOCK_CLS = "core.llm.ChatOpenAI"
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     """确保每个测试无残留环境变量"""
-    for suffix in ("API_KEY", "BASE_URL", "MODEL"):
+    for suffix in ("API_KEY", "BASE_URL", "MODEL_NAME"):
         monkeypatch.delenv(f"LLM_{suffix}", raising=False)
-        monkeypatch.delenv(f"CODE_LLM_{suffix}", raising=False)
 
 
 class TestCreateChatModel:
@@ -29,44 +28,6 @@ class TestCreateChatModel:
             streaming=True,
             temperature=0.0,
         )
-
-    @patch(MOCK_CLS)
-    def test_from_env_vars(self, mock_cls, monkeypatch):
-        monkeypatch.setenv("LLM_API_KEY", "sk-env")
-        monkeypatch.setenv("LLM_BASE_URL", "https://env.api")
-        monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
-
-        create_chat_model()
-
-        mock_cls.assert_called_once_with(
-            api_key="sk-env",
-            base_url="https://env.api",
-            model="deepseek-chat",
-            streaming=True,
-            temperature=0.0,
-        )
-
-    @patch(MOCK_CLS)
-    def test_env_overrides_config(self, mock_cls, monkeypatch):
-        monkeypatch.setenv("LLM_MODEL", "env-model")
-        cfg = {"api_key": "sk-cfg", "model": "cfg-model"}
-
-        create_chat_model(cfg)
-
-        _, kw = mock_cls.call_args
-        assert kw["model"] == "env-model"
-        assert kw["api_key"] == "sk-cfg"
-
-    @patch(MOCK_CLS)
-    def test_custom_env_prefix(self, mock_cls, monkeypatch):
-        monkeypatch.setenv("CODE_LLM_API_KEY", "sk-code")
-        monkeypatch.setenv("CODE_LLM_MODEL", "deepseek-coder")
-
-        create_chat_model(env_prefix="CODE_LLM")
-
-        _, kw = mock_cls.call_args
-        assert kw["api_key"] == "sk-code"
-        assert kw["model"] == "deepseek-coder"
 
     @patch(MOCK_CLS)
     def test_base_url_empty_becomes_none(self, mock_cls):
@@ -118,3 +79,4 @@ class TestValidation:
 
         _, kw = mock_cls.call_args
         assert kw["api_key"] == "sk-fallback"
+

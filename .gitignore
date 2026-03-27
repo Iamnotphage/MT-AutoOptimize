@@ -7,6 +7,6 @@ output/reports/*
 .pytest_cache/
 
 # 配置文件
-config.json
+.env
 
 
