@@ -27,6 +27,11 @@ class DiffResult:
         return f"+{self.added} -{self.removed}"
 
 
+def _ensure_newline(s: str) -> str:
+    """确保字符串以换行符结尾。"""
+    return s if not s or s.endswith("\n") else s + "\n"
+
+
 def generate_diff(
     file_path: str,
     old_content: str,
@@ -36,8 +41,8 @@ def generate_diff(
 ) -> DiffResult:
     """一次计算生成 unified diff + 变更统计"""
 
-    old_lines = old_content.splitlines(keepends=True)
-    new_lines = new_content.splitlines(keepends=True)
+    old_lines = _ensure_newline(old_content).splitlines(keepends=True)
+    new_lines = _ensure_newline(new_content).splitlines(keepends=True)
 
     diff_lines = list(difflib.unified_diff(
         old_lines,

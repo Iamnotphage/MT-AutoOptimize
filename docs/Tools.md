@@ -177,8 +177,13 @@ DEFAULT_TOOL_RISK: dict[str, str] = {
 
 ## 已实现工具一览
 
+### File System
+
 | 工具 | 风险 | 说明 |
 |------|------|------|
 | `read_file` | LOW | 读取文件内容，支持行范围、自动截断 |
 | `write_file` | MEDIUM | 写入/创建文件，返回 diff 供 CLI 渲染 |
 | `ls` | LOW | 列出目录内容，自动跳过 `.git` 等无关目录 |
+| `glob` | LOW | 查找匹配 glob 模式的文件 |
+| `grep` | LOW | 搜索文件内容中的正则表达式，返回匹配行和行号 |
+| `edit_file` | MEDIUM | 替换文件中的文本，支持精确/灵活/正则匹配，返回 diff |
