@@ -13,6 +13,10 @@ from typing import TYPE_CHECKING, Any
 from langgraph.types import Command
 from rich.console import Console
 from rich.text import Text
+import unicodedata
+from prompt_toolkit import prompt as pt_prompt
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.cursor_shapes import CursorShape
 
 from core.event_bus import AgentEvent, EventType
 
@@ -224,8 +228,10 @@ class Repl:
 
     # ── REPL 命令 ────────────────────────────────────────────────
 
+
     def _prompt(self) -> str:
-        return f"[{PROMPT_STYLE}]{PROMPT_SYMBOL}[/{PROMPT_STYLE}] "
+        # ANSI 紫色 ❯，prompt_toolkit 会正确计算其宽度
+        return f"\x1b[38;2;132;122;206m{PROMPT_SYMBOL}\x1b[0m "
 
     def _handle_command(self, cmd: str) -> bool:
         """处理 /command。返回 True 继续循环，False 退出。"""
@@ -273,12 +279,12 @@ class Repl:
     # ── 渲染 ─────────────────────────────────────────────────────
 
     def _render_user_input(self, user_input: str) -> None:
-        """用灰色背景重新渲染用户输入行，与 LLM 输出区分"""
         sys.stdout.write("\x1b[A\x1b[2K\r")
         sys.stdout.flush()
         line = Text(no_wrap=True)
+        content = f"{PROMPT_SYMBOL} {user_input}"
         line.append(
-            f"{PROMPT_SYMBOL} {user_input}".ljust(self.console.width),
+            _ljust_cols(content, self.console.width),
             style=_BG_USER,
         )
         self.console.print(line)
@@ -288,7 +294,7 @@ class Repl:
     def run(self) -> None:
         while self.running:
             try:
-                user_input = self.console.input(self._prompt())
+                user_input = pt_prompt(ANSI(self._prompt()), cursor=CursorShape.BEAM)
             except EOFError:
                 break
             except KeyboardInterrupt:
@@ -316,3 +322,19 @@ class Repl:
 def _truncate(val: Any, maxlen: int = 60) -> str:
     s = str(val)
     return s if len(s) <= maxlen else s[:maxlen] + "…"
+
+# ── 新增辅助函数（类外或类内均可）──────────────────────────────────
+
+def _display_width(s: str) -> int:
+    """计算字符串的终端显示列数（全角字符占 2 列）"""
+    width = 0
+    for ch in s:
+        eaw = unicodedata.east_asian_width(ch)
+        width += 2 if eaw in ("W", "F") else 1
+    return width
+
+
+def _ljust_cols(s: str, total_cols: int, fillchar: str = " ") -> str:
+    """按显示列数右填充，而非字符数"""
+    pad = max(0, total_cols - _display_width(s))
+    return s + fillchar * pad
