@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from config import load_llm_config
+from config.settings import CONTEXT as CONTEXT_CONFIG
+from core.context import ContextManager
 from core.event_bus import EventBus
 from core.graph import build_agent_graph
 from core.llm import create_chat_model
@@ -26,6 +28,7 @@ class AgentRuntime:
     event_bus: EventBus
     registry: ToolRegistry
     workspace: str
+    context_manager: ContextManager
 
 
 def _make_sync_executor(registry: ToolRegistry, event_bus: EventBus):
@@ -71,9 +74,17 @@ def create_agent_runtime(
 
     event_bus = EventBus()
 
-    registry = ToolRegistry()
+    # Context & Memory — 必须在工具注册之前初始化，因为 save_memory tool 需要回调
     ws = workspace or os.getcwd()
-    registry.register(*create_default_tools(workspace=ws))
+    ctx_manager = ContextManager(working_directory=ws, config=CONTEXT_CONFIG)
+    ctx_manager.load()
+    ctx_manager.session_stats.model = llm_cfg["model"]
+
+    registry = ToolRegistry()
+    registry.register(*create_default_tools(
+        workspace=ws,
+        save_memory_fn=ctx_manager.save_memory,
+    ))
 
     graph = build_agent_graph(
         llm=llm,
@@ -81,6 +92,7 @@ def create_agent_runtime(
         tool_schemas=registry.schemas,
         executor=_make_sync_executor(registry, event_bus),
         checkpointer=MemorySaver(),
+        context_manager=ctx_manager,
     )
 
     return AgentRuntime(
@@ -88,4 +100,5 @@ def create_agent_runtime(
         event_bus=event_bus,
         registry=registry,
         workspace=ws,
+        context_manager=ctx_manager,
     )

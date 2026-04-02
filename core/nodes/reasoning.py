@@ -22,11 +22,17 @@ from prompts.system_prompt import build_system_prompt
 
 logger = logging.getLogger(__name__)
 
+# 类型引用，避免硬依赖
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from core.context import ContextManager
+
 
 def create_reasoning_node(
     llm: BaseChatModel,
     event_bus: EventBus,
     tool_schemas: list[dict[str, Any]] | None = None,
+    context_manager: ContextManager | None = None,
 ) -> Callable[[AgentState], dict]:
     """
     创建 reasoning 节点函数
@@ -35,30 +41,37 @@ def create_reasoning_node(
         llm: LangChain ChatModel (如 ChatOpenAI)
         event_bus: 事件总线, 用于向 CLI 层推送流式事件
         tool_schemas: OpenAI function-calling 格式的工具定义列表
+        context_manager: Context & Memory 管理器 (可选)
 
     Returns:
         LangGraph 节点函数 ``(AgentState) -> dict``
-
-    Usage::
-
-        from langchain_openai import ChatOpenAI
-
-        llm = ChatOpenAI(model="deepseek-chat", api_key=..., base_url=...)
-        reasoning = create_reasoning_node(llm, event_bus, tool_schemas)
-        graph.add_node("reasoning", reasoning)
     """
     bound_llm = llm.bind_tools(tool_schemas) if tool_schemas else llm
 
     def reasoning_node(state: AgentState) -> dict:
         turn = state.get("turn_count", 0)
 
-        # 1) system prompt — 每轮动态生成, 含 MT-3000 上下文
-        system_msg = SystemMessage(
-            content=build_system_prompt(state, tool_schemas)
-        )
-        messages = [system_msg] + list(state.get("message", []))
+        # 1) system prompt — 每轮动态生成, 含全局上下文 (Tier 1)
+        global_context = ""
+        if context_manager is not None:
+            global_context = context_manager.build_system_context()
 
-        # 2) 流式调用 LLM, 逐 chunk 发送 EventBus 事件
+        system_msg = SystemMessage(
+            content=build_system_prompt(state, tool_schemas, global_context=global_context)
+        )
+
+        # 2) 构建 messages: system + session_context (Tier 2, 仅首轮) + 历史
+        messages = [system_msg]
+
+        if turn == 0 and context_manager is not None:
+            session_ctx = context_manager.build_session_context()
+            if session_ctx:
+                from langchain_core.messages import HumanMessage
+                messages.append(HumanMessage(content=session_ctx))
+
+        messages.extend(list(state.get("message", [])))
+
+        # 3) 流式调用 LLM, 逐 chunk 发送 EventBus 事件
         collected = _stream_with_events(bound_llm, messages, event_bus, turn)
 
         if collected is None:
@@ -69,16 +82,20 @@ def create_reasoning_node(
                 "pending_tool_calls": [],
             }
 
-        # 3) 构造 AIMessage 写入 state.message 历史
+        # 4) 收集 token usage → SessionStats
+        if context_manager is not None:
+            _record_token_usage(collected, context_manager)
+
+        # 5) 构造 AIMessage 写入 state.message 历史
         ai_message = AIMessage(
             content=collected.content or "",
             tool_calls=collected.tool_calls or [],
         )
 
-        # 4) tool_calls → pending_tool_calls
+        # 6) tool_calls → pending_tool_calls
         pending = _extract_tool_calls(collected, event_bus, turn)
 
-        # 5) TURN_START 事件
+        # 7) TURN_START 事件
         event_bus.emit(AgentEvent(
             type=EventType.TURN_START,
             data={
@@ -196,3 +213,36 @@ def _extract_tool_calls(
         ))
 
     return pending
+
+
+def _record_token_usage(
+    response: AIMessageChunk,
+    context_manager: ContextManager,
+) -> None:
+    """从 LLM 响应中提取 token usage 并记录到 SessionStats。
+
+    LangChain 的 usage_metadata (如果模型提供) 格式:
+        {"input_tokens": int, "output_tokens": int, "total_tokens": int}
+    也支持 response_metadata.usage 格式 (OpenAI 兼容):
+        {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
+    """
+    stats = context_manager.session_stats
+
+    # 优先从 usage_metadata 取 (LangChain 标准)
+    usage = getattr(response, "usage_metadata", None)
+    if usage and isinstance(usage, dict):
+        stats.record_llm_usage(
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+        )
+        return
+
+    # 回退: response_metadata.usage (OpenAI 兼容)
+    resp_meta = getattr(response, "response_metadata", None) or {}
+    usage = resp_meta.get("usage") or resp_meta.get("token_usage") or {}
+    if usage:
+        stats.record_llm_usage(
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+        )
+

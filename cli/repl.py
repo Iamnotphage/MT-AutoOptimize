@@ -42,6 +42,8 @@ _BG_USER = "on #252530"
 _COMMANDS = [
     ("/clear",   "清屏"),
     ("/new",     "开启新会话 (清空对话历史)"),
+    ("/context", "查看/刷新上下文 (show|reload)"),
+    ("/memory",  "管理记忆 (list|add|remove)"),
     ("/help",    "显示帮助信息"),
     ("/version", "显示版本号"),
     ("/exit",    "退出"),
@@ -148,6 +150,14 @@ class Repl:
     def _invoke_agent(self, user_input: str) -> None:
         from langchain_core.messages import HumanMessage
 
+        # 记录用户消息
+        cm = self.runtime.context_manager
+        cm.session_stats.prompt_count += 1
+        cm.record_message({
+            "type": "user",
+            "display": user_input,
+        })
+
         config = {"configurable": {"thread_id": self.thread_id}}
         state_input: dict | Command = {
             "message": [HumanMessage(content=user_input)],
@@ -166,6 +176,22 @@ class Repl:
             self.console.print(f"\n  [red bold]Agent 执行出错:[/red bold] {e}")
 
         self._end_stream()
+
+        # 记录助手响应（从 graph state 提取最后一条 AI 消息）
+        try:
+            snapshot = self.runtime.graph.get_state(config)
+            messages = snapshot.values.get("message", [])
+            for msg in reversed(messages):
+                if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
+                    cm.record_message({
+                        "type": "assistant",
+                        "content": msg.content[:500] if msg.content else "",
+                        "model": cm.session_stats.model,
+                    })
+                    break
+        except Exception:
+            pass
+
         self.console.print()
 
     # ── Interrupt / 人工审批 ─────────────────────────────────────
@@ -245,15 +271,75 @@ class Repl:
 
         return decisions
 
+    # ── 退出 & 会话统计 ───────────────────────────────────────────
+
+    def _on_exit(self) -> None:
+        """退出时: flush 会话历史 + 渲染统计 + 告别。"""
+        cm = self.runtime.context_manager
+
+        # Flush session history to disk
+        filepath = cm.flush_session()
+        if filepath:
+            self.console.print(f"\n  [dim]会话已保存 → {filepath}[/dim]")
+
+        # Render stats
+        self._render_session_stats()
+
+        self.console.print("  [dim]再见！[/dim]\n")
+
+    def _render_session_stats(self) -> None:
+        """渲染会话统计摘要。"""
+        stats = self.runtime.context_manager.session_stats
+
+        # 如果没有任何交互，跳过
+        if stats.turn_count == 0 and stats.prompt_count == 0:
+            return
+
+        duration = stats.duration_seconds
+        if duration >= 60:
+            dur_str = f"{int(duration // 60)}m {int(duration % 60)}s"
+        else:
+            dur_str = f"{int(duration)}s"
+
+        self.console.print()
+        self.console.print("  [dim]─────────────────────────────────────[/dim]")
+        self.console.print("  [bold dim]Session Summary[/bold dim]")
+
+        if stats.model:
+            self.console.print(f"  [dim]Model:     {stats.model}[/dim]")
+        self.console.print(f"  [dim]Duration:  {dur_str}[/dim]")
+
+        if stats.prompt_count:
+            self.console.print(f"  [dim]Prompts:   {stats.prompt_count}[/dim]")
+        if stats.turn_count:
+            self.console.print(f"  [dim]Turns:     {stats.turn_count}[/dim]")
+
+        if stats.total_tokens > 0:
+            self.console.print(
+                f"  [dim]Tokens:    {stats.total_tokens:,} "
+                f"(in: {stats.total_input_tokens:,} / out: {stats.total_output_tokens:,})[/dim]"
+            )
+
+        if stats.tool_calls_total > 0:
+            self.console.print(
+                f"  [dim]Tools:     {stats.tool_calls_total} calls "
+                f"({stats.tool_calls_success} success, {stats.tool_calls_failed} failed)[/dim]"
+            )
+
+        self.console.print("  [dim]─────────────────────────────────────[/dim]")
+
     # ── REPL 命令 ────────────────────────────────────────────────
 
     def _handle_command(self, cmd: str) -> bool:
         """处理 /command。返回 True 继续循环，False 退出。"""
-        match cmd:
+        parts = cmd.split(maxsplit=2)
+        base = parts[0].lower()
+
+        match base:
             case "/help" | "/h" | "/?":
                 self._show_help()
             case "/exit" | "/quit" | "/q":
-                self.console.print("\n  [dim]再见！[/dim]\n")
+                self._on_exit()
                 return False
             case "/version" | "/v":
                 from cli.app import VERSION
@@ -263,6 +349,10 @@ class Repl:
             case "/new":
                 self.thread_id = uuid.uuid4().hex
                 self.console.print("  [dim]已开启新会话[/dim]")
+            case "/context":
+                self._cmd_context(parts[1:])
+            case "/memory":
+                self._cmd_memory(parts[1:])
             case _:
                 self.console.print(f"  [red]未知命令:[/red] {cmd}")
                 self.console.print("  [dim]输入 /help 查看可用命令[/dim]")
@@ -277,18 +367,98 @@ class Repl:
             ("/version, /v", "显示版本号"),
             ("/clear", "清屏"),
             ("/new", "开启新会话 (清空对话历史)"),
+            ("/context show", "显示当前已加载的上下文"),
+            ("/context reload", "重新加载上下文文件"),
+            ("/memory list", "列出所有已保存的记忆"),
+            ("/memory add <fact>", "添加一条记忆"),
+            ("/memory remove <n>", "删除第 n 条记忆 (从 1 开始)"),
             ("/exit, /q", "退出"),
         ]
         for name, desc in cmds:
             self.console.print(
-                f"    [{PROMPT_STYLE}]{name:<16}[/{PROMPT_STYLE}] [dim]{desc}[/dim]"
+                f"    [{PROMPT_STYLE}]{name:<24}[/{PROMPT_STYLE}] [dim]{desc}[/dim]"
             )
         self.console.print()
-        self.console.print("  [bold]使用示例[/bold]")
-        self.console.print()
-        self.console.print("  [dim]  读取 config.json 文件[/dim]")
-        self.console.print("  [dim]  分析 src/main.c 的优化方向[/dim]")
-        self.console.print()
+
+    # ── /context 命令 ────────────────────────────────────────────
+
+    def _cmd_context(self, args: list[str]) -> None:
+        cm = self.runtime.context_manager
+        sub = args[0] if args else "show"
+
+        if sub == "show":
+            s = cm.stats
+            self.console.print()
+            self.console.print(f"  [bold]Context 状态[/bold]")
+            self.console.print(f"    已加载文件: {s['loaded_files']}")
+            self.console.print(f"    记忆条数:   {s['memories_count']}")
+            self.console.print(
+                f"    全局 context: {s['global_context_tokens']} tokens "
+                f"({s['global_context_chars']} chars)"
+            )
+            self.console.print(
+                f"    项目 context: {s['project_context_tokens']} tokens "
+                f"({s['project_context_chars']} chars)"
+            )
+            if cm.loaded_files:
+                self.console.print(f"    文件列表:")
+                for f in cm.loaded_files:
+                    self.console.print(f"      [dim]{f}[/dim]")
+            self.console.print()
+        elif sub == "reload":
+            cm.reload()
+            s = cm.stats
+            self.console.print(
+                f"  [green]✓[/green] 已重新加载 "
+                f"({s['loaded_files']} 文件, {s['memories_count']} 条记忆)"
+            )
+        else:
+            self.console.print(f"  [red]未知子命令:[/red] /context {sub}")
+            self.console.print("  [dim]用法: /context show | /context reload[/dim]")
+
+    # ── /memory 命令 ─────────────────────────────────────────────
+
+    def _cmd_memory(self, args: list[str]) -> None:
+        cm = self.runtime.context_manager
+        sub = args[0] if args else "list"
+
+        if sub == "list":
+            memories = cm.get_memories()
+            if not memories:
+                self.console.print("  [dim]暂无记忆。使用 /memory add <fact> 添加。[/dim]")
+                return
+            self.console.print()
+            self.console.print(f"  [bold]Agent 记忆[/bold] ({len(memories)} 条)")
+            self.console.print()
+            for i, m in enumerate(memories, 1):
+                self.console.print(f"    [dim]{i}.[/dim] {m}")
+            self.console.print()
+
+        elif sub == "add":
+            fact = " ".join(args[1:]).strip() if len(args) > 1 else ""
+            if not fact:
+                self.console.print("  [red]用法:[/red] /memory add <要记住的内容>")
+                return
+            cm.save_memory(fact)
+            self.console.print(f"  [green]✓[/green] 已保存记忆: {fact}")
+
+        elif sub == "remove":
+            if len(args) < 2:
+                self.console.print("  [red]用法:[/red] /memory remove <序号>")
+                return
+            try:
+                idx = int(args[1]) - 1  # 用户输入从 1 开始
+            except ValueError:
+                self.console.print("  [red]序号必须是数字[/red]")
+                return
+            if cm.remove_memory(idx):
+                self.console.print(f"  [green]✓[/green] 已删除第 {idx + 1} 条记忆")
+            else:
+                self.console.print(f"  [red]✗[/red] 序号 {idx + 1} 不存在")
+
+        else:
+            self.console.print(f"  [red]未知子命令:[/red] /memory {sub}")
+            self.console.print("  [dim]用法: /memory list | add <fact> | remove <n>[/dim]")
 
     # ── 渲染 ─────────────────────────────────────────────────────
 
@@ -416,6 +586,7 @@ class Repl:
             try:
                 user_input = self._read_input()
             except EOFError:
+                self._on_exit()
                 break
             except KeyboardInterrupt:
                 self._end_stream()
@@ -429,7 +600,7 @@ class Repl:
             self._render_user_input(stripped)
 
             if stripped.startswith("/"):
-                if not self._handle_command(stripped.lower()):
+                if not self._handle_command(stripped):
                     break
                 continue
 

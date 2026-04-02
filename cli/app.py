@@ -41,6 +41,20 @@ class App:
 
         self.console.print(f"  [dim]工作目录  {runtime.workspace}[/dim]")
         self.console.print(f"  [dim]已注册工具  {', '.join(runtime.registry.names)}[/dim]")
+
+        # Context & Memory 加载信息
+        cm = runtime.context_manager
+        ctx_stats = cm.stats
+        ctx_parts = []
+        if ctx_stats["loaded_files"] > 0:
+            ctx_parts.append(f"{ctx_stats['loaded_files']} 个上下文文件")
+        if ctx_stats["memories_count"] > 0:
+            ctx_parts.append(f"{ctx_stats['memories_count']} 条记忆")
+        if ctx_parts:
+            self.console.print(f"  [dim]已加载  {', '.join(ctx_parts)}[/dim]")
+        else:
+            self.console.print(f"  [dim]提示  编辑 ~/.mtagent/CONTEXT.md 或 ./CONTEXT.md 添加项目指令[/dim]")
+
         self.console.print()
         self.console.print("  [dim]输入自然语言描述需求，或输入 /help 查看帮助[/dim]")
         self.console.print()

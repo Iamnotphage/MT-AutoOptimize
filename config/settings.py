@@ -16,6 +16,25 @@ class LLMConfig(TypedDict):
     model: str
 
 
+# ---------------------------------------------------------------------------
+# Context & Memory 配置
+# ---------------------------------------------------------------------------
+CONTEXT = {
+    # 自动扫描的 context 文件名（项目根目录）
+    "file_names": ["CONTEXT.md"],
+    # 全局配置目录（存放全局 CONTEXT.md、history 等）
+    "global_dir": os.path.expanduser("~/.mtagent"),
+    # 压缩: 历史 token 占 context window 的百分比阈值 (参考 gemini-cli 50%)
+    "compression_threshold": 0.50,
+    # 压缩: 保留最近消息的比例 (参考 gemini-cli 30%)
+    "compression_preserve_ratio": 0.30,
+    # Context 注入预算: 最大估算 token 数
+    "context_budget_tokens": 2000,
+    # Token limit: 模型的 context window 大小（默认值，可被运行时覆盖）
+    "token_limit": 65536,
+}
+
+
 def load_llm_config() -> LLMConfig:
     """Load LLM configuration from environment variables.
 

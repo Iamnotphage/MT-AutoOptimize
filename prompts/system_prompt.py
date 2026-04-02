@@ -18,12 +18,14 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 使用 MT-3000 交叉编译工具链编译代码
 - 根据编译错误自动修复并重试
 {tool_section}
-{context_section}
+{global_context_section}
+{runtime_context_section}
 ## 工作原则
 1. 先理解用户需求，必要时通过工具读取文件获取上下文
 2. 逐步完成优化任务，每一步给出清晰的推理
 3. 遇到编译错误时分析原因并修复
 4. 用中文回答用户问题
+5. 当用户要求你记住某事时，调用 save_memory 工具
 
 如果需要使用工具，请通过 function calling 调用。当任务完成或不需要工具时，直接给出文本回答。\
 """
@@ -56,9 +58,17 @@ def _format_context_section(state: dict[str, Any]) -> str:
     return "\n## 当前上下文\n" + "\n".join(parts) + "\n"
 
 
+def _format_global_context_section(context_text: str) -> str:
+    """将 Tier 1 全局 CONTEXT.md 内容格式化为 prompt section"""
+    if not context_text:
+        return ""
+    return "\n## 项目指令（来自 CONTEXT.md）\n" + context_text + "\n"
+
+
 def build_system_prompt(
     state: dict[str, Any],
     tool_schemas: list[dict[str, Any]] | None = None,
+    global_context: str = "",
 ) -> str:
     """
     组装完整的系统提示词
@@ -66,8 +76,10 @@ def build_system_prompt(
     Args:
         state: AgentState (或兼容 dict)
         tool_schemas: OpenAI function-calling 格式的工具 schema 列表
+        global_context: Tier 1 全局上下文内容（来自 ContextManager.build_system_context()）
     """
     return SYSTEM_PROMPT_TEMPLATE.format(
         tool_section=_format_tool_section(tool_schemas or []),
-        context_section=_format_context_section(state),
+        global_context_section=_format_global_context_section(global_context),
+        runtime_context_section=_format_context_section(state),
     )
