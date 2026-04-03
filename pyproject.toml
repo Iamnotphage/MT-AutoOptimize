@@ -1,5 +1,8 @@
 [project]
 name = "mt-autooptimize"
+authors = [
+  {name = "Chen", email = "iamnotphage@163.com"},
+]
 version = "0.1.0"
 description = "MT-3000 coding agent"
 requires-python = ">=3.10"
