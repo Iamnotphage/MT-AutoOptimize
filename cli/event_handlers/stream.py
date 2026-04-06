@@ -34,6 +34,7 @@ class StreamHandler:
         event_bus.subscribe(EventType.TOOL_CALL_REQUEST, self.on_tool_request)
         event_bus.subscribe(EventType.TOOL_CALL_COMPLETE, self.on_tool_complete)
         event_bus.subscribe(EventType.TOOL_LIVE_OUTPUT, self.on_tool_live_output)
+        event_bus.subscribe(EventType.CONTEXT_COMPRESSED, self.on_context_compressed)
         event_bus.subscribe(EventType.ERROR, self.on_error)
 
     # ── 流式控制 ─────────────────────────────────────────────────
@@ -154,3 +155,12 @@ class StreamHandler:
         self.end_stream()
         err = event.data.get("error", "未知错误")
         self._console.print(f"\n  [red bold]ERROR[/red bold] {err}")
+
+    def on_context_compressed(self, event: AgentEvent) -> None:
+        self.end_stream()
+        removed = event.data.get("removed_count", 0)
+        kept = event.data.get("kept_count", 0)
+        self._console.print(
+            f"\n  [bold yellow]⚡ 上下文已压缩[/bold yellow] "
+            f"[dim]({removed} 条消息摘要化, 保留 {kept} 条)[/dim]"
+        )

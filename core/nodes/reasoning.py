@@ -14,7 +14,7 @@ import logging
 from typing import Any, Callable
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, SystemMessage
 
 from core.event_bus import AgentEvent, EventBus, EventType
 from core.state import AgentState, ToolCallInfo
@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from core.context import ContextManager
     from core.session import SessionStats
 
+from core.compressor import ContextCompressor
+
 
 def create_reasoning_node(
     llm: BaseChatModel,
@@ -35,6 +37,7 @@ def create_reasoning_node(
     tool_schemas: list[dict[str, Any]] | None = None,
     context_manager: ContextManager | None = None,
     session_stats: SessionStats | None = None,
+    compressor: ContextCompressor | None = None,
 ) -> Callable[[AgentState], dict]:
     """
     创建 reasoning 节点函数
@@ -45,6 +48,7 @@ def create_reasoning_node(
         tool_schemas: OpenAI function-calling 格式的工具定义列表
         context_manager: Context & Memory 管理器 (可选)
         session_stats: 会话统计 (可选，用于记录 token usage)
+        compressor: 上下文压缩器 (可选，当 token 超阈值时自动压缩)
 
     Returns:
         LangGraph 节点函数 ``(AgentState) -> dict``
@@ -53,6 +57,13 @@ def create_reasoning_node(
 
     def reasoning_node(state: AgentState) -> dict:
         turn = state.get("turn_count", 0)
+
+        # 0) 压缩检查 — 在构建 messages 之前, 检查是否需要压缩历史
+        compress_updates = {}
+        if compressor is not None and session_stats is not None:
+            compress_updates = _maybe_compress(
+                compressor, event_bus, session_stats, state,
+            )
 
         # 1) system prompt — 每轮动态生成, 含全局上下文 (Tier 1)
         global_context = ""
@@ -64,6 +75,7 @@ def create_reasoning_node(
         )
 
         # 2) 构建 messages: system + session_context (Tier 2, 仅首轮) + 历史
+        #    如果发生了压缩，state.message 已被更新（通过 compress_updates 返回的 message 操作）
         messages = [system_msg]
 
         if turn == 0 and context_manager is not None:
@@ -114,11 +126,17 @@ def create_reasoning_node(
             turn + 1, len(ai_message.content), len(pending),
         )
 
-        return {
+        result = {
             "message": [ai_message],
             "turn_count": turn + 1,
             "pending_tool_calls": pending,
         }
+
+        # 合并压缩操作 — RemoveMessage + summary_message 需要和 ai_message 一起写入 state
+        if compress_updates.get("message"):
+            result["message"] = compress_updates["message"] + result["message"]
+
+        return result
 
     return reasoning_node
 
@@ -240,4 +258,55 @@ def _record_token_usage(
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
         )
+
+
+def _maybe_compress(
+    compressor: ContextCompressor,
+    event_bus: EventBus,
+    session_stats: SessionStats,
+    state: AgentState,
+) -> dict:
+    """检查是否需要压缩，若需要则执行并返回 state 更新。
+
+    Returns:
+        包含 "message" 键的 dict（RemoveMessage 列表 + summary），
+        或空 dict 表示无需压缩。
+    """
+    if not compressor.should_compress(session_stats.last_input_tokens):
+        return {}
+
+    history = list(state.get("message", []))
+    if not history:
+        return {}
+
+    logger.info(
+        "Context compression triggered: last_input_tokens=%d",
+        session_stats.last_input_tokens,
+    )
+
+    result = compressor.compress(history)
+    if result is None:
+        return {}
+
+    # 构建 state 更新: 先删除旧消息，再插入摘要
+    message_ops: list = []
+    for msg_id in result.remove_message_ids:
+        message_ops.append(RemoveMessage(id=msg_id))
+    message_ops.append(result.summary_message)
+
+    # 发送事件通知 CLI
+    event_bus.emit(AgentEvent(
+        type=EventType.CONTEXT_COMPRESSED,
+        data={
+            "removed_count": result.removed_count,
+            "kept_count": result.kept_count,
+        },
+    ))
+
+    logger.info(
+        "Compression complete: removed=%d kept=%d",
+        result.removed_count, result.kept_count,
+    )
+
+    return {"message": message_ops}
 

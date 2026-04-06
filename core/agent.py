@@ -13,6 +13,7 @@ from typing import Any
 
 from config import load_llm_config
 from config.settings import CONTEXT as CONTEXT_CONFIG
+from core.compressor import ContextCompressor
 from core.context import ContextManager
 from core.session import SessionRecorder
 from core.event_bus import EventBus
@@ -90,6 +91,14 @@ def create_agent_runtime(
         save_memory_fn=ctx_manager.save_memory,
     ))
 
+    # 上下文压缩器
+    compressor = ContextCompressor(
+        llm=llm,
+        token_limit=CONTEXT_CONFIG.get("token_limit", 65536),
+        threshold=CONTEXT_CONFIG.get("compression_threshold", 0.50),
+        preserve_ratio=CONTEXT_CONFIG.get("compression_preserve_ratio", 0.30),
+    )
+
     graph = build_agent_graph(
         llm=llm,
         event_bus=event_bus,
@@ -98,6 +107,7 @@ def create_agent_runtime(
         checkpointer=MemorySaver(),
         context_manager=ctx_manager,
         session_stats=session.stats,
+        compressor=compressor,
     )
 
     return AgentRuntime(
