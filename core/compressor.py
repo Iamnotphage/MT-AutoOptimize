@@ -17,12 +17,9 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
-    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
-
-from core.utils.tokens import estimate_tokens
 from prompts.compression_prompt import COMPRESSION_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
@@ -101,15 +98,26 @@ class ContextCompressor:
 
         # 构造结果
         remove_ids = [msg.id for msg in old_messages if msg.id]
-        summary_msg = HumanMessage(
-            content=f"<conversation_history_summary>\n{summary_text}\n</conversation_history_summary>",
-        )
+        summary_msg = self.build_summary_message(summary_text)
 
         return CompressResult(
             remove_message_ids=remove_ids,
             summary_message=summary_msg,
+            summary_text=summary_text,
+            compressed_messages=[summary_msg, *messages[split_idx:]],
             removed_count=len(old_messages),
             kept_count=len(messages) - split_idx,
+        )
+
+    @staticmethod
+    def build_summary_message(summary_text: str) -> HumanMessage:
+        """将压缩摘要包装成注入历史的 HumanMessage。"""
+        return HumanMessage(
+            content=(
+                "<conversation_history_summary>\n"
+                f"{summary_text}\n"
+                "</conversation_history_summary>"
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -188,17 +196,28 @@ class ContextCompressor:
 class CompressResult:
     """压缩结果。"""
 
-    __slots__ = ("remove_message_ids", "summary_message", "removed_count", "kept_count")
+    __slots__ = (
+        "remove_message_ids",
+        "summary_message",
+        "summary_text",
+        "compressed_messages",
+        "removed_count",
+        "kept_count",
+    )
 
     def __init__(
         self,
         remove_message_ids: list[str],
         summary_message: HumanMessage,
+        summary_text: str,
+        compressed_messages: list[BaseMessage],
         removed_count: int,
         kept_count: int,
     ) -> None:
         self.remove_message_ids = remove_message_ids
         self.summary_message = summary_message
+        self.summary_text = summary_text
+        self.compressed_messages = compressed_messages
         self.removed_count = removed_count
         self.kept_count = kept_count
 

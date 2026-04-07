@@ -23,6 +23,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
+from core.compressor import ContextCompressor
+from core.utils.tokens import estimate_tokens
+
 logger = logging.getLogger(__name__)
 
 
@@ -186,7 +191,7 @@ class SessionRecorder:
         # resume: 合并旧消息
         all_records: list[dict] = []
         if self._resumed_from and self._resumed_from.is_file():
-            all_records.extend(self.load_session(self._resumed_from))
+            all_records.extend(self.load_raw_session(self._resumed_from))
         all_records.extend(self._records)
 
         start_record = {
@@ -255,6 +260,10 @@ class SessionRecorder:
 
     def load_session(self, filepath: Path) -> list[dict]:
         """加载指定会话文件的渲染记录（不含 session_start/session_end）。"""
+        return [record for record in self.load_raw_session(filepath) if record.get("type") in _RENDERABLE_TYPES]
+
+    def load_raw_session(self, filepath: Path) -> list[dict]:
+        """加载指定会话文件中的全部业务记录（不含 session_start/session_end）。"""
         records: list[dict] = []
         for line in filepath.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -262,11 +271,49 @@ class SessionRecorder:
                 continue
             try:
                 record = json.loads(line)
-                if record.get("type") in _RENDERABLE_TYPES:
+                if record.get("type") not in {"session_start", "session_end"}:
                     records.append(record)
             except json.JSONDecodeError:
                 continue
         return records
+
+    def build_resume_messages(self, filepath: Path) -> list[BaseMessage]:
+        """从会话文件重建 resume 所需消息，只保留最后一次压缩摘要及其后的消息。"""
+        records = self.load_raw_session(filepath)
+
+        last_compression_idx = -1
+        summary_text = ""
+        for idx, record in enumerate(records):
+            if record.get("type") == "compression":
+                last_compression_idx = idx
+                summary_text = str(record.get("summary", "")).strip()
+
+        resumed: list[BaseMessage] = []
+        if summary_text:
+            resumed.append(ContextCompressor.build_summary_message(summary_text))
+
+        start_idx = last_compression_idx + 1 if last_compression_idx >= 0 else 0
+        for record in records[start_idx:]:
+            rtype = record.get("type")
+            if rtype == "user":
+                content = record.get("display", record.get("content", ""))
+                resumed.append(HumanMessage(content=content))
+            elif rtype == "assistant":
+                content = record.get("content", "")
+                resumed.append(AIMessage(content=content))
+
+        return resumed
+
+    def estimate_messages_tokens(self, messages: list[BaseMessage]) -> int:
+        """估算一组消息的 token 数，用于 resume 后上下文占比展示。"""
+        total = 0
+        for msg in messages:
+            role = getattr(msg, "type", "")
+            content = msg.content
+            if isinstance(content, list):
+                content = str(content)
+            total += estimate_tokens(f"[{role}] {content}")
+        return total
 
     # ------------------------------------------------------------------
     # 内部实现

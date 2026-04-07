@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # 类型引用，避免硬依赖
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
+    from core.compressor import CompressResult
     from core.context import ContextManager
     from core.session import SessionStats
 
@@ -59,9 +60,10 @@ def create_reasoning_node(
         turn = state.get("turn_count", 0)
 
         # 0) 压缩检查 — 在构建 messages 之前, 检查是否需要压缩历史
-        compress_updates = {}
+        compress_result = None
+        history = list(state.get("message", []))
         if compressor is not None and session_stats is not None:
-            compress_updates = _maybe_compress(
+            compress_result = _maybe_compress(
                 compressor, event_bus, session_stats, state,
             )
 
@@ -84,18 +86,11 @@ def create_reasoning_node(
                 from langchain_core.messages import HumanMessage
                 messages.append(HumanMessage(content=session_ctx))
 
-        messages.extend(list(state.get("message", [])))
+        effective_history = compress_result.compressed_messages if compress_result else history
+        messages.extend(effective_history)
 
         # 3) 流式调用 LLM, 逐 chunk 发送 EventBus 事件
         collected = _stream_with_events(bound_llm, messages, event_bus, turn)
-
-        if collected is None:
-            logger.warning("LLM 返回空响应, turn=%d", turn)
-            return {
-                "message": [AIMessage(content="[LLM 无响应]")],
-                "turn_count": turn + 1,
-                "pending_tool_calls": [],
-            }
 
         # 4) 收集 token usage → SessionStats
         if session_stats is not None:
@@ -133,8 +128,8 @@ def create_reasoning_node(
         }
 
         # 合并压缩操作 — RemoveMessage + summary_message 需要和 ai_message 一起写入 state
-        if compress_updates.get("message"):
-            result["message"] = compress_updates["message"] + result["message"]
+        if compress_result is not None:
+            result["message"] = _build_compression_message_ops(compress_result) + result["message"]
 
         return result
 
@@ -164,7 +159,7 @@ def _stream_with_events(
     messages: list,
     event_bus: EventBus,
     turn: int,
-) -> AIMessageChunk | None:
+) -> AIMessageChunk:
     """流式调用 LLM, 每个 chunk 通过 EventBus 推送事件"""
 
     collected: AIMessageChunk | None = None
@@ -197,7 +192,16 @@ def _stream_with_events(
             data={"error": str(e), "source": "reasoning_node"},
             turn=turn,
         ))
-        return None
+        raise
+
+    if collected is None:
+        err = RuntimeError("LLM returned no response")
+        event_bus.emit(AgentEvent(
+            type=EventType.ERROR,
+            data={"error": str(err), "source": "reasoning_node"},
+            turn=turn,
+        ))
+        raise err
 
     return collected
 
@@ -265,19 +269,18 @@ def _maybe_compress(
     event_bus: EventBus,
     session_stats: SessionStats,
     state: AgentState,
-) -> dict:
+) -> CompressResult | None:
     """检查是否需要压缩，若需要则执行并返回 state 更新。
 
     Returns:
-        包含 "message" 键的 dict（RemoveMessage 列表 + summary），
-        或空 dict 表示无需压缩。
+        CompressResult，或 None 表示无需压缩。
     """
     if not compressor.should_compress(session_stats.last_input_tokens):
-        return {}
+        return None
 
     history = list(state.get("message", []))
     if not history:
-        return {}
+        return None
 
     logger.info(
         "Context compression triggered: last_input_tokens=%d",
@@ -286,18 +289,13 @@ def _maybe_compress(
 
     result = compressor.compress(history)
     if result is None:
-        return {}
-
-    # 构建 state 更新: 先删除旧消息，再插入摘要
-    message_ops: list = []
-    for msg_id in result.remove_message_ids:
-        message_ops.append(RemoveMessage(id=msg_id))
-    message_ops.append(result.summary_message)
+        return None
 
     # 发送事件通知 CLI
     event_bus.emit(AgentEvent(
         type=EventType.CONTEXT_COMPRESSED,
         data={
+            "summary": result.summary_text,
             "removed_count": result.removed_count,
             "kept_count": result.kept_count,
         },
@@ -308,5 +306,11 @@ def _maybe_compress(
         result.removed_count, result.kept_count,
     )
 
-    return {"message": message_ops}
+    return result
 
+
+def _build_compression_message_ops(result: CompressResult) -> list:
+    """构造 LangGraph message 更新操作。"""
+    message_ops: list = [RemoveMessage(id=msg_id) for msg_id in result.remove_message_ids]
+    message_ops.append(result.summary_message)
+    return message_ops

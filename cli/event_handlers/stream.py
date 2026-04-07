@@ -160,6 +160,13 @@ class StreamHandler:
         self.end_stream()
         removed = event.data.get("removed_count", 0)
         kept = event.data.get("kept_count", 0)
+        summary = event.data.get("summary", "")
+        self._session.record({
+            "type": "compression",
+            "summary": summary,
+            "removed_count": removed,
+            "kept_count": kept,
+        })
         self._console.print(
             f"\n  [bold yellow]⚡ 上下文已压缩[/bold yellow] "
             f"[dim]({removed} 条消息摘要化, 保留 {kept} 条)[/dim]"

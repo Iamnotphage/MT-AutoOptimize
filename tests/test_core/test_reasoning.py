@@ -1,8 +1,11 @@
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from core.event_bus import EventType
+from core.compressor import ContextCompressor
+from core.session import SessionStats
 from core.nodes.reasoning import create_reasoning_node, should_use_tools
 
 
@@ -85,8 +88,8 @@ class TestReasoningNode:
         assert len(received) == 1
         assert received[0].data["turn"] == 1
 
-    def test_llm_error_handled(self, event_bus):
-        """LLM 调用失败 → 返回错误消息, 不抛异常"""
+    def test_llm_error_raises(self, event_bus):
+        """LLM 调用失败 → 抛异常，不写入假消息"""
         llm = MagicMock()
         llm.bind_tools.return_value = llm
         llm.stream.side_effect = Exception("API timeout")
@@ -94,11 +97,8 @@ class TestReasoningNode:
         node = create_reasoning_node(llm, event_bus)
         state = {"message": [HumanMessage(content="hi")], "turn_count": 0}
 
-        result = node(state)
-
-        assert result["pending_tool_calls"] == []
-        assert result["turn_count"] == 1
-        assert "LLM" in result["message"][0].content or "无响应" in result["message"][0].content
+        with pytest.raises(Exception, match="API timeout"):
+            node(state)
 
     def test_error_event_on_failure(self, event_bus):
         """LLM 失败时发送 ERROR 事件"""
@@ -111,7 +111,8 @@ class TestReasoningNode:
 
         node = create_reasoning_node(llm, event_bus)
         state = {"message": [HumanMessage(content="hi")], "turn_count": 0}
-        node(state)
+        with pytest.raises(RuntimeError, match="connection refused"):
+            node(state)
 
         assert len(received) == 1
         assert "connection refused" in received[0].data["error"]
@@ -134,6 +135,48 @@ class TestReasoningNode:
         create_reasoning_node(llm, event_bus, tool_schemas=schemas)
 
         llm.bind_tools.assert_called_once_with(schemas)
+
+    def test_compression_applies_on_current_turn(self, event_bus):
+        """触发压缩时，当轮发送给 LLM 的消息应使用摘要后的历史。"""
+        llm = MagicMock()
+        llm.bind_tools.return_value = llm
+        llm.stream.return_value = iter([AIMessageChunk(content="ok")])
+
+        compressor_llm = MagicMock()
+        compressor_llm.invoke.return_value = MagicMock(content="summary text")
+        compressor = ContextCompressor(
+            compressor_llm,
+            token_limit=100,
+            threshold=0.5,
+            preserve_ratio=0.3,
+        )
+        stats = SessionStats(last_input_tokens=80)
+
+        node = create_reasoning_node(
+            llm,
+            event_bus,
+            session_stats=stats,
+            compressor=compressor,
+        )
+        state = {
+            "message": [
+                HumanMessage(content="u1", id="m1"),
+                HumanMessage(content="u2", id="m2"),
+                HumanMessage(content="u3", id="m3"),
+                HumanMessage(content="u4", id="m4"),
+            ],
+            "turn_count": 1,
+        }
+
+        result = node(state)
+
+        streamed_messages = llm.stream.call_args.args[0]
+        assert "conversation_history_summary" in streamed_messages[1].content
+        assert streamed_messages[2].content == "u3"
+        assert streamed_messages[3].content == "u4"
+        assert result["message"][0].id == "m1"
+        assert result["message"][1].id == "m2"
+        assert "conversation_history_summary" in result["message"][2].content
 
 
 class TestShouldUseTools:

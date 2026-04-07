@@ -524,3 +524,34 @@ class TestSessionListAndLoad:
 
         sessions = r2.list_sessions()
         assert len(sessions) == 1
+
+    def test_build_resume_messages_uses_last_compression_snapshot(self, recorder):
+        """resume 只恢复最后一条 compression 摘要及其后的消息。"""
+        recorder.record({"type": "user", "display": "A"})
+        recorder.record({"type": "assistant", "content": "B"})
+        recorder.record({"type": "compression", "summary": "S1"})
+        recorder.record({"type": "user", "display": "C"})
+        recorder.record({"type": "assistant", "content": "D"})
+        recorder.record({"type": "compression", "summary": "S2"})
+        recorder.record({"type": "user", "display": "E"})
+        recorder.record({"type": "assistant", "content": "F"})
+        filepath = recorder.flush()
+
+        messages = recorder.build_resume_messages(filepath)
+
+        assert len(messages) == 3
+        assert "conversation_history_summary" in messages[0].content
+        assert "S2" in messages[0].content
+        assert messages[1].content == "E"
+        assert messages[2].content == "F"
+
+    def test_estimate_messages_tokens_returns_positive_value(self, recorder):
+        """估算 resume 消息 token 数，用于初始 context 占比。"""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        tokens = recorder.estimate_messages_tokens([
+            HumanMessage(content="hello"),
+            AIMessage(content="world"),
+        ])
+
+        assert tokens > 0

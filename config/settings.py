@@ -29,7 +29,7 @@ CONTEXT = {
     # 压缩: 保留最近消息的比例 (参考 gemini-cli 30%)
     "compression_preserve_ratio": 0.30,
     # Token limit: 模型的 context window 大小（默认值，可被运行时覆盖）
-    "token_limit": 65536,
+    "token_limit": 131072,
 }
 
 

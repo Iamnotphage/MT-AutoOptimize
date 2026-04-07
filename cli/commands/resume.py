@@ -29,8 +29,6 @@ def cmd_resume(
     Returns:
         新的 thread_id（恢复成功时），或 None（取消/失败时）。
     """
-    from langchain_core.messages import AIMessage, HumanMessage
-
     sessions = session.list_sessions()
     if not sessions:
         console.print("  [dim]暂无历史会话。[/dim]")
@@ -48,19 +46,10 @@ def cmd_resume(
         console.print("  [red]会话为空，无法恢复[/red]")
         return None
 
-    # 构建 LangChain messages
+    # 构建 LangChain messages（若有压缩记录，仅恢复最后一次压缩摘要及其后的消息）
     thread_id = uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
-
-    messages = []
-    for record in records:
-        rtype = record.get("type")
-        if rtype == "user":
-            content = record.get("display", record.get("content", ""))
-            messages.append(HumanMessage(content=content))
-        elif rtype == "assistant":
-            content = record.get("content", "")
-            messages.append(AIMessage(content=content))
+    messages = session.build_resume_messages(filepath)
 
     if not messages:
         console.print("  [red]没有可恢复的消息[/red]")
@@ -73,9 +62,10 @@ def cmd_resume(
         return None
 
     session._resumed_from = filepath
+    session.stats.last_input_tokens = session.estimate_messages_tokens(messages)
 
     # 渲染历史
-    _render_resumed_history(console, records)
+    _render_resumed_history(console, session.load_raw_session(filepath))
 
     return thread_id
 
