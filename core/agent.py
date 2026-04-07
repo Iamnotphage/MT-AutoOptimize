@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,7 @@ class AgentRuntime:
     workspace: str
     context_manager: ContextManager
     session: SessionRecorder
+    checkpoint_manager: AbstractContextManager[Any] | None = None
 
 
 def _make_sync_executor(registry: ToolRegistry, event_bus: EventBus):
@@ -69,7 +71,7 @@ def create_agent_runtime(
         runtime = create_agent_runtime(workspace="/path/to/project")
         result = runtime.graph.invoke(state, config)
     """
-    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.checkpoint.sqlite import SqliteSaver
 
     llm_cfg = load_llm_config()
 
@@ -99,12 +101,16 @@ def create_agent_runtime(
         preserve_ratio=CONTEXT_CONFIG.get("compression_preserve_ratio", 0.30),
     )
 
+    checkpoint_path = session.get_checkpoint_path()
+    checkpoint_manager = SqliteSaver.from_conn_string(str(checkpoint_path))
+    checkpointer = checkpoint_manager.__enter__()
+
     graph = build_agent_graph(
         llm=llm,
         event_bus=event_bus,
         tool_schemas=registry.schemas,
         executor=_make_sync_executor(registry, event_bus),
-        checkpointer=MemorySaver(),
+        checkpointer=checkpointer,
         context_manager=ctx_manager,
         session_stats=session.stats,
         compressor=compressor,
@@ -117,4 +123,5 @@ def create_agent_runtime(
         workspace=ws,
         context_manager=ctx_manager,
         session=session,
+        checkpoint_manager=checkpoint_manager,
     )

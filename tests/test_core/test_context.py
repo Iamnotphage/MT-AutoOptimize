@@ -305,6 +305,7 @@ def recorder(tmp_workspace, config):
 class TestSessionHistory:
     def test_record_and_flush(self, recorder):
         """记录消息并 flush 到磁盘。"""
+        recorder.set_thread_id("thread-123")
         recorder.record({"type": "transcript_message", "role": "user", "content": "hello"})
         recorder.record({"type": "transcript_message", "role": "assistant", "content": "hi"})
 
@@ -319,10 +320,12 @@ class TestSessionHistory:
         start = json.loads(lines[0])
         assert start["type"] == "session_start"
         assert "sessionId" in start
+        assert start["threadId"] == "thread-123"
 
         end = json.loads(lines[-1])
         assert end["type"] == "session_end"
         assert "stats" in end
+        assert end["threadId"] == "thread-123"
 
     def test_flush_empty_returns_none(self, recorder):
         """没有记录时返回 None。"""
@@ -432,6 +435,7 @@ class TestSessionListAndLoad:
 
     def test_list_sessions_after_flush(self, recorder):
         """flush 后能列出该会话。"""
+        recorder.set_thread_id("thread-1")
         recorder.record({"type": "transcript_message", "role": "user", "content": "hello"})
         recorder.record({"type": "transcript_message", "role": "assistant", "content": "hi there"})
         recorder.flush()
@@ -441,12 +445,14 @@ class TestSessionListAndLoad:
         assert sessions[0]["first_user_message"] == "hello"
         assert sessions[0]["message_count"] == 2
         assert sessions[0]["session_id"] == recorder.stats.session_id
+        assert sessions[0]["thread_id"] == "thread-1"
 
     def test_list_sessions_sorted_descending(self, tmp_workspace, config):
         """多个会话按时间倒序排列。"""
         tmp_workspace.mkdir(parents=True, exist_ok=True)
 
         r1 = SessionRecorder(working_directory=str(tmp_workspace), config=config)
+        r1.set_thread_id("thread-a")
         r1.record({"type": "transcript_message", "role": "user", "content": "first session"})
         r1.flush()
 
@@ -454,6 +460,7 @@ class TestSessionListAndLoad:
         _time.sleep(0.05)
 
         r2 = SessionRecorder(working_directory=str(tmp_workspace), config=config)
+        r2.set_thread_id("thread-b")
         r2.record({"type": "transcript_message", "role": "user", "content": "second session"})
         r2.flush()
 

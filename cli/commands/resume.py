@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from prompt_toolkit import Application
@@ -46,26 +45,40 @@ def cmd_resume(
         console.print("  [red]会话为空，无法恢复[/red]")
         return None
 
-    # 构建 LangChain messages（若有压缩记录，仅恢复最后一次压缩摘要及其后的消息）
-    thread_id = uuid.uuid4().hex
-    config = {"configurable": {"thread_id": thread_id}}
+    thread_id = str(selected.get("thread_id") or "").strip()
     messages = session.build_resume_messages(filepath)
-
     if not messages:
         console.print("  [red]没有可恢复的消息[/red]")
         return None
 
+    if not thread_id:
+        console.print("  [red]会话缺少 thread_id，无法恢复执行现场[/red]")
+        return None
+
+    config = {"configurable": {"thread_id": thread_id}}
+    restored_from_checkpoint = False
     try:
-        graph.update_state(config, {"message": messages})
-    except Exception as e:
-        console.print(f"  [red]恢复失败:[/red] {e}")
+        snapshot = graph.get_state(config)
+        snapshot_values = getattr(snapshot, "values", None) or {}
+        if snapshot_values:
+            restored_from_checkpoint = True
+            restored_messages = snapshot_values.get("message") or messages
+            session.stats.last_input_tokens = session.estimate_messages_tokens(restored_messages)
+    except Exception:
+        snapshot = None
+
+    if not restored_from_checkpoint:
+        console.print("  [red]未找到持久化 checkpoint，当前 /resume 仅支持执行态恢复[/red]")
         return None
 
     session._resumed_from = filepath
-    session.stats.last_input_tokens = session.estimate_messages_tokens(messages)
 
     # 渲染历史
     _render_resumed_history(console, session.load_raw_session(filepath))
+
+    if snapshot and getattr(snapshot, "next", None):
+        console.print("  [dim]已恢复到挂起执行现场，将继续处理未完成的审批/中断。[/dim]")
+        console.print()
 
     return thread_id
 

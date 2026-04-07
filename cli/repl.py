@@ -42,6 +42,8 @@ class Repl:
         self.console = console
         self.runtime = runtime
         self.thread_id = uuid.uuid4().hex
+        self.runtime.session.set_thread_id(self.thread_id)
+        self._closed = False
         self._history = InMemoryHistory()
         self._token_limit = CONTEXT_CONFIG.get("token_limit", 65536)
 
@@ -85,6 +87,7 @@ class Repl:
         from langchain_core.messages import HumanMessage
 
         session = self.runtime.session
+        session.set_thread_id(self.thread_id)
         session.stats.prompt_count += 1
         session.record({
             "type": "transcript_message",
@@ -99,11 +102,7 @@ class Repl:
 
         try:
             self.runtime.graph.invoke(state_input, config)
-
-            while self._has_pending_interrupt(config):
-                requests = self._get_interrupt_requests(config)
-                decisions = self._prompt_approval(requests)
-                self.runtime.graph.invoke(Command(resume=decisions), config)
+            self._resume_pending_interrupts(config)
 
         except Exception as e:
             self._stream.end_stream()
@@ -111,6 +110,13 @@ class Repl:
 
         self._stream.end_stream()
         self.console.print()
+
+    def _resume_pending_interrupts(self, config: dict) -> None:
+        """处理已存在的 interrupt，直到图继续运行完成。"""
+        while self._has_pending_interrupt(config):
+            requests = self._get_interrupt_requests(config)
+            decisions = self._prompt_approval(requests)
+            self.runtime.graph.invoke(Command(resume=decisions), config)
 
     # ── Interrupt / 人工审批 ─────────────────────────────────────
 
@@ -192,11 +198,23 @@ class Repl:
     # ── 退出 & 统计 ──────────────────────────────────────────────
 
     def _on_exit(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+
         filepath = self.runtime.session.flush()
+        checkpoint_manager = getattr(self.runtime, "checkpoint_manager", None)
+        if checkpoint_manager is not None:
+            checkpoint_manager.__exit__(None, None, None)
+            self.runtime.checkpoint_manager = None
         if filepath:
             self.console.print(f"\n  [dim]会话已保存 → {filepath}[/dim]")
         self._render_session_stats()
         self.console.print("  [dim]再见！[/dim]\n")
+
+    def close(self) -> None:
+        """对外暴露的幂等关闭入口。"""
+        self._on_exit()
 
     def _render_session_stats(self) -> None:
         stats = self.runtime.session.stats
@@ -257,11 +275,14 @@ class Repl:
                 self.console.clear()
             case "/new":
                 self.thread_id = uuid.uuid4().hex
+                self.runtime.session.set_thread_id(self.thread_id)
                 self.console.print("  [dim]已开启新会话[/dim]")
             case "/resume":
                 new_tid = cmd_resume(self.console, self.runtime.session, self.runtime.graph)
                 if new_tid:
                     self.thread_id = new_tid
+                    self.runtime.session.set_thread_id(self.thread_id)
+                    self._resume_pending_interrupts({"configurable": {"thread_id": self.thread_id}})
             case "/context":
                 cmd_context(self.console, self.runtime.context_manager, parts[1:])
             case "/memory":

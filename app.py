@@ -31,6 +31,7 @@ class App:
         from core.agent import create_agent_runtime
 
         self.show_welcome()
+        repl: Repl | None = None
 
         try:
             runtime = create_agent_runtime()
@@ -60,7 +61,10 @@ class App:
         self.console.print()
 
         repl = Repl(self.console, runtime=runtime)
-        repl.run()
+        try:
+            repl.run()
+        finally:
+            repl.close()
 
 
 def main() -> int:

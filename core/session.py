@@ -170,6 +170,7 @@ class SessionRecorder:
         self.stats = SessionStats()
         self._records: list[dict] = []
         self._resumed_from: Path | None = None
+        self._thread_id: str = ""
 
     # ------------------------------------------------------------------
     # 录制
@@ -180,6 +181,10 @@ class SessionRecorder:
         if "timestamp" not in record:
             record["timestamp"] = int(time.time() * 1000)
         self._records.append(record)
+
+    def set_thread_id(self, thread_id: str) -> None:
+        """更新当前活跃的 LangGraph thread_id。"""
+        self._thread_id = thread_id
 
     # ------------------------------------------------------------------
     # 持久化
@@ -204,6 +209,7 @@ class SessionRecorder:
         start_record = {
             "type": "session_start",
             "sessionId": self.stats.session_id,
+            "threadId": self._thread_id,
             "project": str(self._working_dir),
             "model": self.stats.model,
             "branch": self._get_git_branch(),
@@ -213,6 +219,7 @@ class SessionRecorder:
         end_record = {
             "type": "session_end",
             "sessionId": self.stats.session_id,
+            "threadId": self._thread_id,
             "stats": self.stats.to_dict(),
             "timestamp": int(time.time() * 1000),
         }
@@ -349,6 +356,7 @@ class SessionRecorder:
     def _parse_session_file(filepath: Path) -> dict[str, Any] | None:
         """解析 JSONL 会话文件，提取摘要信息。"""
         session_id = ""
+        thread_id = ""
         model = ""
         branch = ""
         timestamp = 0
@@ -366,6 +374,7 @@ class SessionRecorder:
             rtype = record.get("type", "")
             if rtype == "session_start":
                 session_id = record.get("sessionId", "")
+                thread_id = record.get("threadId", "")
                 model = record.get("model", "")
                 branch = record.get("branch", "")
                 timestamp = record.get("timestamp", 0)
@@ -392,6 +401,7 @@ class SessionRecorder:
 
         return {
             "session_id": session_id,
+            "thread_id": thread_id,
             "model": model,
             "branch": branch,
             "timestamp": timestamp,
@@ -406,6 +416,12 @@ class SessionRecorder:
         global_dir = Path(self._config.get("global_dir", "~/.mtagent")).expanduser()
         project_hash = hashlib.md5(str(self._working_dir).encode()).hexdigest()[:10]
         return global_dir / "history" / project_hash
+
+    def get_checkpoint_path(self) -> Path:
+        """当前项目的 LangGraph checkpoint SQLite 文件路径。"""
+        history_dir = self._get_history_dir()
+        history_dir.mkdir(parents=True, exist_ok=True)
+        return history_dir / "checkpoints.sqlite"
 
     def _get_git_branch(self) -> str:
         """获取当前 git 分支名。"""
