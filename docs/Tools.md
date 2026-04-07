@@ -50,10 +50,22 @@ class ToolResult:
 
 一次工具调用在 ReAct 循环中的完整生命周期：
 
-```
-pending → awaiting_approval → pending → executing → success / error
-                  ↓
-              cancelled（用户拒绝）
+```mermaid
+stateDiagram-v2
+    [*] --> pending: LLM emits tool call
+    pending --> awaiting_approval: medium/high risk
+    pending --> executing: low risk or approved
+    awaiting_approval --> pending: approved
+    awaiting_approval --> cancelled: denied
+    executing --> success: tool completed
+    executing --> error: tool failed
+    executing --> interrupted: process interrupted / recovery handoff
+    interrupted --> pending: explicit retry in recovery phase
+    interrupted --> cancelled: explicit cancel in recovery phase
+    success --> [*]
+    error --> [*]
+    cancelled --> [*]
+    interrupted --> [*]: checkpoint persisted, waiting for recovery
 ```
 
 ```python
@@ -68,10 +80,23 @@ class ToolCallInfo(TypedDict):
         "success",
         "error",
         "cancelled",
+        "interrupted",
     ]
     result: str | None
     error_msg: str | None
 ```
+
+各状态的当前语义：
+
+| 状态 | 含义 | 自动恢复策略 |
+|------|------|--------------|
+| `pending` | 等待执行 | 可继续执行 |
+| `awaiting_approval` | 等待用户审批 | 恢复后必须重新确认 |
+| `executing` | 正在执行 | 不应跨进程长期停留，恢复阶段会转义为 `interrupted` |
+| `success` | 已成功完成 | 绝不自动重跑 |
+| `error` | 已执行失败 | 保留结果，不自动重跑 |
+| `cancelled` | 被用户拒绝或取消 | 绝不自动重跑 |
+| `interrupted` | 执行过程中被打断，结果不可信 | 等待恢复策略决定重试或取消 |
 
 ## 调用链路
 
@@ -102,6 +127,11 @@ observation_node
   ▼
 reasoning_node（下一轮，LLM 看到 ToolMessage 决定继续或结束）
 ```
+
+说明：
+
+- 当前代码路径已经正式支持 `interrupted` 作为工具调用状态的一部分。
+- `interrupted` 的真正恢复处理属于 Phase 3 后续步骤；P3-1 先完成状态定义和文档收口。
 
 ## 新增工具
 

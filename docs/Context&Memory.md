@@ -125,6 +125,8 @@ resume 时会：
 2. Phase 3
    处理工具执行中断、未完成审批、压缩后 checkpoint 兼容等异常恢复策略。
 
+当前已完成的 P3-1 为工具调用状态机正式引入 `interrupted`，用于表达“工具执行过程中被打断，结果不可信，等待恢复策略决定后续动作”。
+
 ## Phase 2: 持久化 Checkpoint
 
 当前已接入 LangGraph 的 SQLite checkpointer，用于恢复 graph execution state。

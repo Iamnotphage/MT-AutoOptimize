@@ -14,6 +14,7 @@ class ToolCallInfo(TypedDict):
         "success",
         "error",
         "cancelled",
+        "interrupted",
     ]
     result: str | None
     error_msg: str | None

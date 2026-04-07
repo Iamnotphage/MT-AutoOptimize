@@ -126,6 +126,8 @@ def _build_tool_messages(completed: list[ToolCallInfo]) -> list[ToolMessage]:
             content = f"[工具执行失败] {tc.get('error_msg', 'unknown error')}"
         elif tc["status"] == "cancelled":
             content = "[工具调用已被用户拒绝]"
+        elif tc["status"] == "interrupted":
+            content = "[工具执行中断，等待恢复策略处理]"
         else:
             content = f"[未知状态: {tc['status']}]"
 
