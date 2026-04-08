@@ -18,16 +18,16 @@ MAX_CHARS = 50_000
 
 
 class ReadFileArgs(BaseModel):
-    file_path: str = Field(description="要读取的文件路径（相对于工作区）")
-    start_line: Optional[int] = Field(None, ge=1, description="起始行号 (1-based)")
-    end_line: Optional[int] = Field(None, ge=1, description="结束行号 (1-based, 含)")
+    file_path: str = Field(description="Path to the file to read (relative to workspace)")
+    start_line: Optional[int] = Field(None, ge=1, description="Start line number (1-based, inclusive)")
+    end_line: Optional[int] = Field(None, ge=1, description="End line number (1-based, inclusive)")
 
 
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = (
-        "读取指定文件的内容。支持通过 start_line / end_line 读取指定行范围。"
-        "大文件会自动截断并提示如何继续读取。"
+        "Read file contents. Supports line range selection via start_line/end_line. "
+        "Large files are automatically truncated with guidance on how to continue reading."
     )
     risk_level = ToolRiskLevel.LOW
     args_schema = ReadFileArgs
@@ -79,8 +79,8 @@ class ReadFileTool(BaseTool):
         header = f"File: {file_path}  (lines {shown_lo}–{shown_hi} of {total})"
         if truncated:
             header += (
-                f"\n⚠ 内容已截断 (上限 {MAX_LINES} 行 / {MAX_CHARS} 字符)。"
-                f" 使用 start_line={shown_hi + 1} 继续读取。"
+                f"\n⚠ Content truncated (limit: {MAX_LINES} lines / {MAX_CHARS} chars). "
+                f"Use start_line={shown_hi + 1} to continue reading."
             )
 
         return ToolResult(

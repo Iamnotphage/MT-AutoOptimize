@@ -60,7 +60,7 @@ class TestReadFileTool:
         r = self._run(tool.execute(file_path="big.txt"))
         assert r.success
         assert r.metadata["truncated"] is True
-        assert "截断" in r.output
+        assert "truncated" in r.output
 
     def test_schema_shape(self, tool):
         s = tool.schema

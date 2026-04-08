@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import START, END, StateGraph
 from core.event_bus import EventBus
@@ -8,12 +10,21 @@ from core.nodes.human_approval import create_human_approval_node
 from core.nodes.tool_execution import create_tool_execution_node
 from core.nodes.observation import create_observation_node, should_continue_loop
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from core.context import ContextManager
+    from core.session import SessionStats
+    from core.compressor import ContextCompressor
+
 def build_agent_graph(
     llm: BaseChatModel,
     event_bus: EventBus,
     tool_schemas: list[dict] | None = None,
     executor = None,
     checkpointer = None,
+    context_manager: ContextManager | None = None,
+    session_stats: SessionStats | None = None,
+    compressor: ContextCompressor | None = None,
 ) -> StateGraph:
     """
     工厂模式创建结点，构建 ReAct 循环的 LangGraph 状态图
@@ -35,7 +46,7 @@ def build_agent_graph(
             return f"[未注册工具: {tool_name}]"
 
     # 工厂模式创建结点函数
-    reasoning_node = create_reasoning_node(llm, event_bus, tool_schemas)
+    reasoning_node = create_reasoning_node(llm, event_bus, tool_schemas, context_manager, session_stats, compressor)
     tool_routing_node = create_tool_routing_node(event_bus)
     human_approval_node = create_human_approval_node(event_bus)
     tool_execution_node = create_tool_execution_node(event_bus, executor)

@@ -3,8 +3,9 @@
 DEFAULT_TOOL_RISK: dict[str, str] = {
     # 文件操作
     "read_file":           "low",
-    "glob_search":         "low",
-    "grep_search":         "low",
+    "ls":                  "low",
+    "glob":                "low",
+    "grep":                "low",
     "write_file":          "medium",
     "edit_file":           "medium",
     # Shell
@@ -23,6 +24,7 @@ DEFAULT_TOOL_RISK: dict[str, str] = {
     "slurm_status":        "low",
     "slurm_fetch":         "low",
     # Agent 控制
+    "save_memory":         "low",
     "ask_user":            "low",
     "plan_mode":           "low",
 }
