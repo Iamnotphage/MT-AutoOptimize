@@ -147,6 +147,8 @@ _RENDERABLE_TYPES = {
     "tool_complete",
     "tool_diff",
     "tool_call",
+    "approval_request",
+    "approval_decision",
     "transcript_message",
 }
 

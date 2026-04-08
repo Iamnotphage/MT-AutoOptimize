@@ -137,6 +137,20 @@ resume 时会：
 
 这样可以避免 resume 后误重复执行工具。
 
+当前已完成的 P3-3 为审批恢复策略：
+
+- 若 checkpoint 中存在 `awaiting_approval`
+- 恢复时必须同时存在可恢复的审批 interrupt 请求
+- 若状态不一致（有待审批工具但没有审批请求），则拒绝恢复执行现场
+- 若审批请求存在，则 `/resume` 会明确提示“将重新请求确认”
+
+同时，session 日志会额外记录：
+
+- `approval_request`
+- `approval_decision`
+
+用于后续回放和审计。
+
 ## Phase 2: 持久化 Checkpoint
 
 当前已接入 LangGraph 的 SQLite checkpointer，用于恢复 graph execution state。

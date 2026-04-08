@@ -70,6 +70,10 @@ def cmd_resume(
                     snapshot=snapshot,
                 )
                 snapshot_values = getattr(snapshot, "values", None) or {}
+            interrupt_requests = _extract_interrupt_requests(snapshot)
+            if _has_awaiting_approval(snapshot) and not interrupt_requests:
+                console.print("  [red]待审批工具状态不完整：存在 awaiting_approval，但没有可恢复的审批请求[/red]")
+                return None
             restored_from_checkpoint = True
             restored_messages = snapshot_values.get("message") or messages
             session.stats.last_input_tokens = session.estimate_messages_tokens(restored_messages)
@@ -86,7 +90,10 @@ def cmd_resume(
     _render_resumed_history(console, session.load_raw_session(filepath))
 
     if snapshot and getattr(snapshot, "next", None):
-        console.print("  [dim]已恢复到挂起执行现场，将继续处理未完成的审批/中断。[/dim]")
+        if interrupt_requests:
+            console.print("  [dim]已恢复到待审批状态，接下来会重新请求你的确认。[/dim]")
+        else:
+            console.print("  [dim]已恢复到挂起执行现场，将继续处理未完成的审批/中断。[/dim]")
         console.print()
 
     return thread_id
@@ -96,6 +103,24 @@ def _is_pending_tool_execution(snapshot: Any) -> bool:
     """判断 checkpoint 是否停在未完成的 tool_execution。"""
     next_nodes = getattr(snapshot, "next", ()) or ()
     return "tool_execution" in next_nodes
+
+
+def _has_awaiting_approval(snapshot: Any) -> bool:
+    values = getattr(snapshot, "values", None) or {}
+    pending_calls = values.get("pending_tool_calls") or []
+    return any(tc.get("status") == "awaiting_approval" for tc in pending_calls)
+
+
+def _extract_interrupt_requests(snapshot: Any) -> list[dict]:
+    requests: list[dict] = []
+    for task in getattr(snapshot, "tasks", ()) or ():
+        for intr in getattr(task, "interrupts", ()) or ():
+            value = getattr(intr, "value", None)
+            if isinstance(value, list):
+                requests.extend(v for v in value if isinstance(v, dict))
+            elif isinstance(value, dict):
+                requests.append(value)
+    return requests
 
 
 def _recover_interrupted_tool_execution(
@@ -265,6 +290,22 @@ def _render_resumed_history(console: Console, records: list[dict]) -> None:
                     f"\n  [bold cyan]⏺ {display}[/bold cyan]"
                     f"[dim]({args_brief})[/dim]"
                 )
+
+        elif rtype == "approval_request":
+            name = record.get("tool_name", "?")
+            risk = record.get("risk_level", "medium")
+            console.print(
+                f"  [yellow]⚠ 审批请求[/yellow] "
+                f"[dim]{name} (risk={risk})[/dim]"
+            )
+
+        elif rtype == "approval_decision":
+            decisions = record.get("decisions", {})
+            approved = sum(1 for v in decisions.values() if v)
+            denied = len(decisions) - approved
+            console.print(
+                f"  [dim]审批结果: {approved} 通过, {denied} 拒绝[/dim]"
+            )
 
         elif rtype == "tool_diff":
             diff = DiffResult(

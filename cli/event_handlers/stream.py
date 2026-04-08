@@ -35,6 +35,8 @@ class StreamHandler:
         event_bus.subscribe(EventType.TOOL_CALL_COMPLETE, self.on_tool_complete)
         event_bus.subscribe(EventType.TOOL_LIVE_OUTPUT, self.on_tool_live_output)
         event_bus.subscribe(EventType.CONTEXT_COMPRESSED, self.on_context_compressed)
+        event_bus.subscribe(EventType.APPROVAL_REQUEST, self.on_approval_request)
+        event_bus.subscribe(EventType.APPROVAL_RESPONSE, self.on_approval_response)
         event_bus.subscribe(EventType.ERROR, self.on_error)
         event_bus.subscribe(EventType.TRANSCRIPT_MESSAGE, self.on_transcript_message)
 
@@ -151,6 +153,21 @@ class StreamHandler:
         self.end_stream()
         err = event.data.get("error", "未知错误")
         self._console.print(f"\n  [red bold]ERROR[/red bold] {err}")
+
+    def on_approval_request(self, event: AgentEvent) -> None:
+        self._session.record({
+            "type": "approval_request",
+            "call_id": event.data.get("call_id", ""),
+            "tool_name": event.data.get("tool_name", ""),
+            "arguments": event.data.get("arguments", {}),
+            "risk_level": event.data.get("risk_level", ""),
+        })
+
+    def on_approval_response(self, event: AgentEvent) -> None:
+        self._session.record({
+            "type": "approval_decision",
+            "decisions": event.data.get("decisions", {}),
+        })
 
     def on_context_compressed(self, event: AgentEvent) -> None:
         self.end_stream()
