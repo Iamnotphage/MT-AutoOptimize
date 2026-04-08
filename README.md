@@ -1,6 +1,6 @@
 # MT-AutoOptimize
 
-![banner](docs/banner.png)
+![banner](docs/imgs/banner.png)
 
 ---
 
@@ -12,7 +12,7 @@ Coding Agent for MT-3000
 
 ## 环境配置
 
-推荐使用`uv`来进行环境配置
+使用`uv`来进行环境配置
 
 首先安装好`uv`，自行获取LLM厂商相关的`base url`和`api key`
 
@@ -27,17 +27,6 @@ MODEL_NAME=YOUR_MODEL_NAME
 
 然后将此环境配置文件改名为`.env`即可
 
----
-
-如果用`conda`，首先如上写好配置文件的环境变量
-
-然后创建环境:
-
-```bash
-conda env create -f environment.yml
-conda activate mt-autooptimize
-```
-
 ## 运行方法
 
 先安装好`uv`
@@ -46,7 +35,7 @@ conda activate mt-autooptimize
 # version 0.1.0
 git checkout develop
 uv sync
-uv run python -m cli.app
+uv run python app.py
 ```
 
 ## 调试方法

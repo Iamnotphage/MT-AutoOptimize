@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
 
 from config import load_llm_config
+from config.settings import CONTEXT as CONTEXT_CONFIG
+from core.compressor import ContextCompressor
+from core.context import ContextManager
+from core.session import SessionRecorder
 from core.event_bus import EventBus
 from core.graph import build_agent_graph
 from core.llm import create_chat_model
@@ -26,6 +31,9 @@ class AgentRuntime:
     event_bus: EventBus
     registry: ToolRegistry
     workspace: str
+    context_manager: ContextManager
+    session: SessionRecorder
+    checkpoint_manager: AbstractContextManager[Any] | None = None
 
 
 def _make_sync_executor(registry: ToolRegistry, event_bus: EventBus):
@@ -63,7 +71,7 @@ def create_agent_runtime(
         runtime = create_agent_runtime(workspace="/path/to/project")
         result = runtime.graph.invoke(state, config)
     """
-    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.checkpoint.sqlite import SqliteSaver
 
     llm_cfg = load_llm_config()
 
@@ -71,16 +79,41 @@ def create_agent_runtime(
 
     event_bus = EventBus()
 
-    registry = ToolRegistry()
+    # Context & Memory — 必须在工具注册之前初始化，因为 save_memory tool 需要回调
     ws = workspace or os.getcwd()
-    registry.register(*create_default_tools(workspace=ws))
+    ctx_manager = ContextManager(working_directory=ws, config=CONTEXT_CONFIG)
+    ctx_manager.load()
+
+    session = SessionRecorder(working_directory=ws, config=CONTEXT_CONFIG)
+    session.stats.model = llm_cfg["model"]
+
+    registry = ToolRegistry()
+    registry.register(*create_default_tools(
+        workspace=ws,
+        save_memory_fn=ctx_manager.save_memory,
+    ))
+
+    # 上下文压缩器
+    compressor = ContextCompressor(
+        llm=llm,
+        token_limit=CONTEXT_CONFIG.get("token_limit", 65536),
+        threshold=CONTEXT_CONFIG.get("compression_threshold", 0.50),
+        preserve_ratio=CONTEXT_CONFIG.get("compression_preserve_ratio", 0.30),
+    )
+
+    checkpoint_path = session.get_checkpoint_path()
+    checkpoint_manager = SqliteSaver.from_conn_string(str(checkpoint_path))
+    checkpointer = checkpoint_manager.__enter__()
 
     graph = build_agent_graph(
         llm=llm,
         event_bus=event_bus,
         tool_schemas=registry.schemas,
         executor=_make_sync_executor(registry, event_bus),
-        checkpointer=MemorySaver(),
+        checkpointer=checkpointer,
+        context_manager=ctx_manager,
+        session_stats=session.stats,
+        compressor=compressor,
     )
 
     return AgentRuntime(
@@ -88,4 +121,7 @@ def create_agent_runtime(
         event_bus=event_bus,
         registry=registry,
         workspace=ws,
+        context_manager=ctx_manager,
+        session=session,
+        checkpoint_manager=checkpoint_manager,
     )

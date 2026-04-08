@@ -24,6 +24,7 @@ DEFAULT_TOOL_RISK: dict[str, str] = {
     "slurm_status":        "low",
     "slurm_fetch":         "low",
     # Agent 控制
+    "save_memory":         "low",
     "ask_user":            "low",
     "plan_mode":           "low",
 }

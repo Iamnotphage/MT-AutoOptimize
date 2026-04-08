@@ -2,7 +2,7 @@
 
 Coding Agent for MT-3000
 
-![graph](./agent_graph.png)
+![graph](./imgs/agent_graph.png)
 
 ---
 

@@ -31,6 +31,7 @@ class EventType(Enum):
     SESSION_END = "session_end"
     ERROR = "error"
     CONTEXT_COMPRESSED = "context_compressed"
+    TRANSCRIPT_MESSAGE = "transcript_message"
 
 
 @dataclass

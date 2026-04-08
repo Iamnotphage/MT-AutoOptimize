@@ -1,33 +1,38 @@
 """MT-AutoOptimize — REPL 交互循环
 
-通过 EventBus 订阅实时渲染 LLM 流式输出、工具调用和执行结果。
-支持 LangGraph interrupt/resume 处理 human_approval 节点。
+纯粹的 Read-Eval-Print Loop 骨架。
+渲染、命令处理、输入组件均委托给独立模块。
 """
 
 from __future__ import annotations
 
 import sys
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from langgraph.types import Command
 from rich.console import Console
 from rich.text import Text
-import unicodedata
-from prompt_toolkit import prompt as pt_prompt
-from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.cursor_shapes import CursorShape
 
-from core.event_bus import AgentEvent, EventType
+from prompt_toolkit.history import InMemoryHistory
+
+from cli.commands.context import cmd_context
+from cli.commands.memory import cmd_memory
+from cli.commands.resume import cmd_resume
+from config.settings import CONTEXT as CONTEXT_CONFIG
+from cli.event_handlers.stream import StreamHandler
+from cli.ui.input import read_input
+from cli.utils.text import (
+    BG_USER,
+    PROMPT_STYLE,
+    PROMPT_SYMBOL,
+    RISK_STYLE,
+    ljust_cols,
+    truncate,
+)
 
 if TYPE_CHECKING:
     from core.agent import AgentRuntime
-
-PROMPT_STYLE = "#847ACE"
-PROMPT_SYMBOL = "❯"
-_RISK_STYLE = {"low": "green", "medium": "yellow", "high": "red bold"}
-_TOOL_DISPLAY = {"write_file": "Write", "read_file": "Read", "ls": "Ls"}
-_BG_USER = "on #252530"
 
 
 class Repl:
@@ -36,98 +41,59 @@ class Repl:
     def __init__(self, console: Console, runtime: AgentRuntime) -> None:
         self.console = console
         self.runtime = runtime
-        self.running = True
         self.thread_id = uuid.uuid4().hex
+        self.runtime.session.set_thread_id(self.thread_id)
+        self._closed = False
+        self._history = InMemoryHistory()
+        self._token_limit = CONTEXT_CONFIG.get("token_limit", 65536)
 
-        self._streaming = False
-        self._last_tool_had_diff = False
+        # 事件处理（渲染 + 录制）
+        self._stream = StreamHandler(
+            console=console,
+            event_bus=runtime.event_bus,
+            session=runtime.session,
+        )
 
-        self._bind_events()
+    # ── 主循环 ───────────────────────────────────────────────────
 
-    # ── EventBus 订阅 ───────────────────────────────────────────
+    def run(self) -> None:
+        while True:
+            try:
+                user_input = read_input(self._history, status_func=self._context_status)
+            except EOFError:
+                self._on_exit()
+                break
+            except KeyboardInterrupt:
+                self._stream.end_stream()
+                self.console.print()
+                continue
 
-    def _bind_events(self) -> None:
-        bus = self.runtime.event_bus
-        bus.subscribe(EventType.CONTENT, self._on_content)
-        bus.subscribe(EventType.THOUGHT, self._on_thought)
-        bus.subscribe(EventType.TOOL_CALL_REQUEST, self._on_tool_request)
-        bus.subscribe(EventType.TOOL_CALL_COMPLETE, self._on_tool_complete)
-        bus.subscribe(EventType.TOOL_LIVE_OUTPUT, self._on_tool_live_output)
-        bus.subscribe(EventType.ERROR, self._on_error)
+            stripped = user_input.strip()
+            if not stripped:
+                continue
 
-    def _end_stream(self) -> None:
-        if self._streaming:
-            self.console.print()
-            self._streaming = False
+            self._render_user_input(stripped)
 
-    def _on_content(self, event: AgentEvent) -> None:
-        text = event.data.get("text", "")
-        if not text:
-            return
-        if not self._streaming:
-            self.console.print()
-            self._streaming = True
-        self.console.print(text, end="", highlight=False, markup=False)
+            if stripped.startswith("/"):
+                if not self._handle_command(stripped):
+                    break
+                continue
 
-    def _on_thought(self, event: AgentEvent) -> None:
-        text = event.data.get("text", "")
-        if not text:
-            return
-        self._end_stream()
-        self.console.print(f"  [dim italic]{text}[/dim italic]", end="", highlight=False)
-
-    def _on_tool_request(self, event: AgentEvent) -> None:
-        self._end_stream()
-        self._last_tool_had_diff = False
-        name = event.data.get("tool_name", "?")
-        args = event.data.get("arguments", {})
-        display = _TOOL_DISPLAY.get(name, name)
-        file_path = args.get("file_path")
-
-        if file_path:
-            self.console.print(f"\n  [bold cyan]⏺ {display}[/bold cyan]({file_path})")
-        else:
-            args_brief = ", ".join(f"{k}={_truncate(v)}" for k, v in args.items())
-            self.console.print(
-                f"\n  [bold cyan]⏺ {display}[/bold cyan]"
-                f"[dim]({args_brief})[/dim]"
-            )
-
-    def _on_tool_complete(self, event: AgentEvent) -> None:
-        name = event.data.get("tool_name", "?")
-        status = event.data.get("status", "")
-
-        if self._last_tool_had_diff:
-            self._last_tool_had_diff = False
-            if status == "error":
-                err = event.data.get("error_msg", "unknown")
-                self.console.print(f"  [red]✗[/red] [dim]{name} 失败: {err}[/dim]")
-            return
-
-        if status == "success":
-            result_preview = _truncate(event.data.get("result", ""), 120)
-            self.console.print(f"  [green]✓[/green] [dim]{name} → {result_preview}[/dim]")
-        elif status == "error":
-            err = event.data.get("error_msg", "unknown")
-            self.console.print(f"  [red]✗[/red] [dim]{name} 失败: {err}[/dim]")
-        elif status == "cancelled":
-            self.console.print(f"  [yellow]⊘[/yellow] [dim]{name} 已取消[/dim]")
-
-    def _on_tool_live_output(self, event: AgentEvent) -> None:
-        if event.data.get("kind") == "diff":
-            from cli.diff_renderer import render_diff
-            self._last_tool_had_diff = True
-            render_diff(self.console, event.data["diff"])
-
-    def _on_error(self, event: AgentEvent) -> None:
-        self._end_stream()
-        err = event.data.get("error", "未知错误")
-        self.console.print(f"\n  [red bold]ERROR[/red bold] {err}")
+            self._invoke_agent(stripped)
 
     # ── Agent 调用 ───────────────────────────────────────────────
 
     def _invoke_agent(self, user_input: str) -> None:
         from langchain_core.messages import HumanMessage
+
+        session = self.runtime.session
+        session.set_thread_id(self.thread_id)
+        session.stats.prompt_count += 1
+        session.record({
+            "type": "transcript_message",
+            "role": "user",
+            "content": user_input,
+        })
 
         config = {"configurable": {"thread_id": self.thread_id}}
         state_input: dict | Command = {
@@ -136,18 +102,23 @@ class Repl:
 
         try:
             self.runtime.graph.invoke(state_input, config)
-
-            while self._has_pending_interrupt(config):
-                requests = self._get_interrupt_requests(config)
-                decisions = self._prompt_approval(requests)
-                self.runtime.graph.invoke(Command(resume=decisions), config)
+            self._resume_pending_interrupts(config)
 
         except Exception as e:
-            self._end_stream()
+            self._stream.end_stream()
             self.console.print(f"\n  [red bold]Agent 执行出错:[/red bold] {e}")
 
-        self._end_stream()
+        self._stream.end_stream()
         self.console.print()
+
+    def _resume_pending_interrupts(self, config: dict) -> None:
+        """处理已存在的 interrupt，直到图继续运行完成。"""
+        while self._has_pending_interrupt(config):
+            requests = self._get_interrupt_requests(config)
+            if not requests:
+                break
+            decisions = self._prompt_approval(requests)
+            self.runtime.graph.invoke(Command(resume=decisions), config)
 
     # ── Interrupt / 人工审批 ─────────────────────────────────────
 
@@ -168,7 +139,7 @@ class Repl:
         return requests
 
     def _prompt_approval(self, requests: list[dict]) -> dict[str, bool]:
-        self._end_stream()
+        self._stream.end_stream()
 
         if not requests:
             return {}
@@ -181,11 +152,11 @@ class Repl:
             name = req.get("tool_name", "?")
             risk = req.get("risk_level", "medium")
             args = req.get("arguments", {})
-            style = _RISK_STYLE.get(risk, "yellow")
+            style = RISK_STYLE.get(risk, "yellow")
 
             self.console.print(f"    [{style}]● {name}[/{style}]  [dim]risk={risk}[/dim]")
             for k, v in args.items():
-                self.console.print(f"      [dim]{k}: {_truncate(v, 100)}[/dim]")
+                self.console.print(f"      [dim]{k}: {truncate(v, 100)}[/dim]")
 
         self.console.print()
 
@@ -226,29 +197,98 @@ class Repl:
 
         return decisions
 
-    # ── REPL 命令 ────────────────────────────────────────────────
+    # ── 退出 & 统计 ──────────────────────────────────────────────
 
+    def _on_exit(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
 
-    def _prompt(self) -> str:
-        # ANSI 紫色 ❯，prompt_toolkit 会正确计算其宽度
-        return f"\x1b[38;2;132;122;206m{PROMPT_SYMBOL}\x1b[0m "
+        filepath = self.runtime.session.flush()
+        checkpoint_manager = getattr(self.runtime, "checkpoint_manager", None)
+        if checkpoint_manager is not None:
+            checkpoint_manager.__exit__(None, None, None)
+            self.runtime.checkpoint_manager = None
+        if filepath:
+            self.console.print(f"\n  [dim]会话已保存 → {filepath}[/dim]")
+        self._render_session_stats()
+        self.console.print("  [dim]再见！[/dim]\n")
+
+    def close(self) -> None:
+        """对外暴露的幂等关闭入口。"""
+        self._on_exit()
+
+    def _render_session_stats(self) -> None:
+        stats = self.runtime.session.stats
+
+        if stats.turn_count == 0 and stats.prompt_count == 0:
+            return
+
+        duration = stats.duration_seconds
+        if duration >= 60:
+            dur_str = f"{int(duration // 60)}m {int(duration % 60)}s"
+        else:
+            dur_str = f"{int(duration)}s"
+
+        self.console.print()
+        self.console.print("  [dim]─────────────────────────────────────[/dim]")
+        self.console.print("  [bold dim]Session Summary[/bold dim]")
+
+        if stats.model:
+            self.console.print(f"  [dim]Model:     {stats.model}[/dim]")
+        self.console.print(f"  [dim]Duration:  {dur_str}[/dim]")
+
+        if stats.prompt_count:
+            self.console.print(f"  [dim]Prompts:   {stats.prompt_count}[/dim]")
+        if stats.turn_count:
+            self.console.print(f"  [dim]Turns:     {stats.turn_count}[/dim]")
+
+        if stats.total_tokens > 0:
+            self.console.print(
+                f"  [dim]Tokens:    {stats.total_tokens:,} "
+                f"(in: {stats.total_input_tokens:,} / out: {stats.total_output_tokens:,})[/dim]"
+            )
+
+        if stats.tool_calls_total > 0:
+            self.console.print(
+                f"  [dim]Tools:     {stats.tool_calls_total} calls "
+                f"({stats.tool_calls_success} success, {stats.tool_calls_failed} failed)[/dim]"
+            )
+
+        self.console.print("  [dim]─────────────────────────────────────[/dim]")
+
+    # ── 命令路由 ─────────────────────────────────────────────────
 
     def _handle_command(self, cmd: str) -> bool:
         """处理 /command。返回 True 继续循环，False 退出。"""
-        match cmd:
+        parts = cmd.split(maxsplit=2)
+        base = parts[0].lower()
+
+        match base:
             case "/help" | "/h" | "/?":
                 self._show_help()
             case "/exit" | "/quit" | "/q":
-                self.console.print("\n  [dim]再见！[/dim]\n")
+                self._on_exit()
                 return False
             case "/version" | "/v":
-                from cli.app import VERSION
+                from app import VERSION
                 self.console.print(f"  [dim]v{VERSION}[/dim]")
             case "/clear":
                 self.console.clear()
             case "/new":
                 self.thread_id = uuid.uuid4().hex
+                self.runtime.session.set_thread_id(self.thread_id)
                 self.console.print("  [dim]已开启新会话[/dim]")
+            case "/resume":
+                new_tid = cmd_resume(self.console, self.runtime.session, self.runtime.graph)
+                if new_tid:
+                    self.thread_id = new_tid
+                    self.runtime.session.set_thread_id(self.thread_id)
+                    self._resume_pending_interrupts({"configurable": {"thread_id": self.thread_id}})
+            case "/context":
+                cmd_context(self.console, self.runtime.context_manager, parts[1:])
+            case "/memory":
+                cmd_memory(self.console, self.runtime.context_manager, parts[1:])
             case _:
                 self.console.print(f"  [red]未知命令:[/red] {cmd}")
                 self.console.print("  [dim]输入 /help 查看可用命令[/dim]")
@@ -263,78 +303,37 @@ class Repl:
             ("/version, /v", "显示版本号"),
             ("/clear", "清屏"),
             ("/new", "开启新会话 (清空对话历史)"),
+            ("/resume", "浏览并恢复历史会话"),
+            ("/context show", "显示当前已加载的上下文"),
+            ("/context reload", "重新加载上下文文件"),
+            ("/memory list", "列出所有已保存的记忆"),
+            ("/memory add <fact>", "添加一条记忆"),
+            ("/memory remove <n>", "删除第 n 条记忆 (从 1 开始)"),
             ("/exit, /q", "退出"),
         ]
         for name, desc in cmds:
             self.console.print(
-                f"    [{PROMPT_STYLE}]{name:<16}[/{PROMPT_STYLE}] [dim]{desc}[/dim]"
+                f"    [{PROMPT_STYLE}]{name:<24}[/{PROMPT_STYLE}] [dim]{desc}[/dim]"
             )
         self.console.print()
-        self.console.print("  [bold]使用示例[/bold]")
-        self.console.print()
-        self.console.print("  [dim]  读取 config.json 文件[/dim]")
-        self.console.print("  [dim]  分析 src/main.c 的优化方向[/dim]")
-        self.console.print()
 
-    # ── 渲染 ─────────────────────────────────────────────────────
+    # ── 上下文状态 ─────────────────────────────────────────────
+
+    def _context_status(self) -> str:
+        """返回上下文占比文本，如 '42%' 或空字符串。"""
+        last = self.runtime.session.stats.last_input_tokens
+        if last <= 0:
+            return ""
+        pct = min(last / self._token_limit * 100, 100)
+        return f"{pct:.0f}%"
+
+    # ── 渲染辅助 ─────────────────────────────────────────────────
 
     def _render_user_input(self, user_input: str) -> None:
+        """用灰色背景重新渲染用户输入行"""
         sys.stdout.write("\x1b[A\x1b[2K\r")
         sys.stdout.flush()
         line = Text(no_wrap=True)
         content = f"{PROMPT_SYMBOL} {user_input}"
-        line.append(
-            _ljust_cols(content, self.console.width),
-            style=_BG_USER,
-        )
+        line.append(ljust_cols(content, self.console.width), style=BG_USER)
         self.console.print(line)
-
-    # ── 主循环 ───────────────────────────────────────────────────
-
-    def run(self) -> None:
-        while self.running:
-            try:
-                user_input = pt_prompt(ANSI(self._prompt()), cursor=CursorShape.BEAM)
-            except EOFError:
-                break
-            except KeyboardInterrupt:
-                self._end_stream()
-                self.console.print()
-                continue
-
-            stripped = user_input.strip()
-            if not stripped:
-                continue
-
-            self._render_user_input(stripped)
-
-            if stripped.startswith("/"):
-                if not self._handle_command(stripped.lower()):
-                    break
-                continue
-
-            self._invoke_agent(stripped)
-
-
-# ── 辅助 ────────────────────────────────────────────────────────
-
-
-def _truncate(val: Any, maxlen: int = 60) -> str:
-    s = str(val)
-    return s if len(s) <= maxlen else s[:maxlen] + "…"
-
-# ── 新增辅助函数（类外或类内均可）──────────────────────────────────
-
-def _display_width(s: str) -> int:
-    """计算字符串的终端显示列数（全角字符占 2 列）"""
-    width = 0
-    for ch in s:
-        eaw = unicodedata.east_asian_width(ch)
-        width += 2 if eaw in ("W", "F") else 1
-    return width
-
-
-def _ljust_cols(s: str, total_cols: int, fillchar: str = " ") -> str:
-    """按显示列数右填充，而非字符数"""
-    pad = max(0, total_cols - _display_width(s))
-    return s + fillchar * pad

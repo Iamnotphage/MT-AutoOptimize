@@ -6,14 +6,21 @@
 
 ```
 tools/
-├── __init__.py          # 导出 + create_default_tools() 集中注册
-├── base.py              # BaseTool 抽象基类、ToolResult、ToolRiskLevel
-├── registry.py          # ToolRegistry — 注册 / 查找 / schema / 执行
-├── policy.py            # 风险等级映射表（供 tool_routing 查表）
+├── __init__.py              # 导出 + create_default_tools() 集中注册
+├── base.py                  # BaseTool 抽象基类、ToolResult、ToolRiskLevel
+├── registry.py              # ToolRegistry — 注册 / 查找 / schema / 执行
+├── policy.py                # 风险等级映射表（供 tool_routing 查表）
+├── agent_ops/
+│   ├── __init__.py
+│   └── memory.py            # SaveMemoryTool
 └── file_ops/
-    ├── read_file.py     # ReadFileTool  (LOW)
-    ├── write_file.py    # WriteFileTool (MEDIUM)
-    └── ls.py            # LsTool        (LOW)
+    ├── __init__.py
+    ├── read_file.py         # ReadFileTool  (LOW)
+    ├── write_file.py        # WriteFileTool (MEDIUM)
+    ├── edit_file.py         # EditFileTool  (MEDIUM)
+    ├── ls.py                # LsTool        (LOW)
+    ├── glob.py              # GlobTool      (LOW)
+    └── grep.py              # GrepTool      (LOW)
 ```
 
 ## 核心概念
@@ -50,10 +57,22 @@ class ToolResult:
 
 一次工具调用在 ReAct 循环中的完整生命周期：
 
-```
-pending → awaiting_approval → pending → executing → success / error
-                  ↓
-              cancelled（用户拒绝）
+```mermaid
+stateDiagram-v2
+    [*] --> pending: LLM emits tool call
+    pending --> awaiting_approval: medium/high risk
+    pending --> executing: low risk or approved
+    awaiting_approval --> pending: approved
+    awaiting_approval --> cancelled: denied
+    executing --> success: tool completed
+    executing --> error: tool failed
+    executing --> interrupted: process interrupted / recovery handoff
+    interrupted --> pending: explicit retry in recovery phase
+    interrupted --> cancelled: explicit cancel in recovery phase
+    success --> [*]
+    error --> [*]
+    cancelled --> [*]
+    interrupted --> [*]: checkpoint persisted, waiting for recovery
 ```
 
 ```python
@@ -68,10 +87,28 @@ class ToolCallInfo(TypedDict):
         "success",
         "error",
         "cancelled",
+        "interrupted",
     ]
     result: str | None
     error_msg: str | None
 ```
+
+各状态的当前语义：
+
+| 状态 | 含义 | 自动恢复策略 |
+|------|------|--------------|
+| `pending` | 等待执行 | 可继续执行 |
+| `awaiting_approval` | 等待用户审批 | 恢复后必须重新确认 |
+| `executing` | 正在执行 | 不应跨进程长期停留，恢复阶段会转义为 `interrupted` |
+| `success` | 已成功完成 | 绝不自动重跑 |
+| `error` | 已执行失败 | 保留结果，不自动重跑 |
+| `cancelled` | 被用户拒绝或取消 | 绝不自动重跑 |
+| `interrupted` | 执行过程中被打断，结果不可信 | 等待恢复策略决定重试或取消 |
+
+边界说明：
+
+- 若 CLI 中断时工具仍处于 `awaiting_approval`，恢复后重新请求确认。
+- 若用户已确认，但 CLI 在工具完成前中断，恢复时不再重新审批，而是按 `interrupted` 处理。
 
 ## 调用链路
 
@@ -102,6 +139,11 @@ observation_node
   ▼
 reasoning_node（下一轮，LLM 看到 ToolMessage 决定继续或结束）
 ```
+
+说明：
+
+- 当前代码路径已经正式支持 `interrupted` 作为工具调用状态的一部分。
+- `interrupted` 的真正恢复处理属于 Phase 3 后续步骤；P3-1 先完成状态定义和文档收口。
 
 ## 新增工具
 
@@ -177,13 +219,21 @@ DEFAULT_TOOL_RISK: dict[str, str] = {
 
 ## 已实现工具一览
 
+**当前默认注册并可被 Agent 调用** 的工具
+
 ### File System
 
 | 工具 | 风险 | 说明 |
 |------|------|------|
 | `read_file` | LOW | 读取文件内容，支持行范围、自动截断 |
 | `write_file` | MEDIUM | 写入/创建文件，返回 diff 供 CLI 渲染 |
+| `edit_file` | MEDIUM | 替换文件中的文本，支持精确/灵活/正则匹配，返回 diff |
 | `ls` | LOW | 列出目录内容，自动跳过 `.git` 等无关目录 |
 | `glob` | LOW | 查找匹配 glob 模式的文件 |
 | `grep` | LOW | 搜索文件内容中的正则表达式，返回匹配行和行号 |
-| `edit_file` | MEDIUM | 替换文件中的文本，支持精确/灵活/正则匹配，返回 diff |
+
+### Agent Operations
+
+| 工具 | 风险 | 说明 |
+|------|------|------|
+| `save_memory` | LOW | 将重要事实写入全局 `CONTEXT.md` 的 `## Agent Memories` 区域，跨会话可用 |

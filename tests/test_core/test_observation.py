@@ -72,6 +72,19 @@ class TestObservationNode:
 
         assert "拒绝" in result["message"][0].content
 
+    def test_interrupted_to_tool_message(self, event_bus):
+        """interrupted 的工具调用生成中断提示。"""
+        node = create_observation_node(event_bus)
+        state = {
+            "completed_tool_calls": [_make_tc(status="interrupted", result=None)],
+            "turn_count": 1,
+            "max_turns": 25,
+        }
+
+        result = node(state)
+
+        assert "中断" in result["message"][0].content
+
     def test_multiple_results(self, event_bus):
         """多个工具结果全部转为 ToolMessage"""
         node = create_observation_node(event_bus)
@@ -159,6 +172,25 @@ class TestObservationNode:
         assert received[0].data["tool_count"] == 1
         assert received[0].data["should_continue"] is True
 
+    def test_tool_transcript_event(self, event_bus):
+        """observation 会发送 canonical tool transcript。"""
+        received = []
+        event_bus.subscribe(EventType.TRANSCRIPT_MESSAGE, lambda e: received.append(e))
+
+        node = create_observation_node(event_bus)
+        state = {
+            "completed_tool_calls": [_make_tc(result="hello world")],
+            "turn_count": 1,
+            "max_turns": 25,
+        }
+
+        node(state)
+
+        assert len(received) == 1
+        assert received[0].data["role"] == "tool"
+        assert received[0].data["tool_call_id"] == "call_1"
+        assert received[0].data["content"] == "hello world"
+
     def test_empty_completed(self, event_bus):
         """空 completed_tool_calls → 无 ToolMessage"""
         node = create_observation_node(event_bus)
@@ -199,3 +231,7 @@ class TestBuildToolMessages:
     def test_cancelled(self):
         msgs = _build_tool_messages([_make_tc(status="cancelled")])
         assert "拒绝" in msgs[0].content
+
+    def test_interrupted(self):
+        msgs = _build_tool_messages([_make_tc(status="interrupted")])
+        assert "中断" in msgs[0].content

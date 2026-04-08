@@ -44,6 +44,17 @@ def create_observation_node(
 
         # 1) completed_tool_calls → ToolMessage 列表
         tool_messages = _build_tool_messages(completed)
+        for tool_msg, tc in zip(tool_messages, completed):
+            event_bus.emit(AgentEvent(
+                type=EventType.TRANSCRIPT_MESSAGE,
+                data={
+                    "role": "tool",
+                    "content": tool_msg.content,
+                    "tool_call_id": tc["call_id"],
+                    "name": tc["tool_name"],
+                },
+                turn=turn,
+            ))
 
         # 2) 判断是否继续循环
         should_continue = turn < max_turns
@@ -115,12 +126,15 @@ def _build_tool_messages(completed: list[ToolCallInfo]) -> list[ToolMessage]:
             content = f"[工具执行失败] {tc.get('error_msg', 'unknown error')}"
         elif tc["status"] == "cancelled":
             content = "[工具调用已被用户拒绝]"
+        elif tc["status"] == "interrupted":
+            content = "[工具执行中断，等待恢复策略处理]"
         else:
             content = f"[未知状态: {tc['status']}]"
 
         messages.append(ToolMessage(
             content=content,
             tool_call_id=tc["call_id"],
+            name=tc["tool_name"],
         ))
 
     return messages
